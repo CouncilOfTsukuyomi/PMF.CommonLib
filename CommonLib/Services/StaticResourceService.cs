@@ -8,13 +8,16 @@ namespace PenumbraModForwarder.Common.Services;
 
 public class StaticResourceService : IStaticResourceService
 {
+    private const string GitHubApiBaseUrl = "https://api.github.com/repos/CouncilOfTsukuyomi/StaticResources/contents/";
+    private const string GitHubApiRefQuery = "?ref=main";
+
     private readonly HttpClient _httpClient;
 
     public StaticResourceService(HttpClient httpClient)
     {
         _httpClient = httpClient;
     }
-    
+        
     private class GitHubContentResponse
     {
         [JsonProperty("content")]
@@ -23,7 +26,7 @@ public class StaticResourceService : IStaticResourceService
         [JsonProperty("encoding")]
         public string? Encoding { get; set; }
     }
-    
+        
     public async Task<(GithubStaticResources.InformationJson?, GithubStaticResources.UpdaterInformationJson?)> GetResourcesUsingGithubApiAsync()
     {
         var info = await GetInformationJsonAsync();
@@ -41,7 +44,7 @@ public class StaticResourceService : IStaticResourceService
     {
         var request = new HttpRequestMessage(
             HttpMethod.Get,
-            "https://api.github.com/repos/ErrorDodo/PenumbraModForwarder-Static-Resources/contents/information.json?ref=main");
+            $"{GitHubApiBaseUrl}information.json{GitHubApiRefQuery}");
         request.Headers.Add("User-Agent", "PenumbraModForwarder");
         request.Headers.Add("Accept", "application/vnd.github.v3+json");
 
@@ -61,7 +64,7 @@ public class StaticResourceService : IStaticResourceService
     {
         var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"https://api.github.com/repos/ErrorDodo/PenumbraModForwarder-Static-Resources/contents/{path}?ref=main");
+            $"{GitHubApiBaseUrl}{path}{GitHubApiRefQuery}");
         request.Headers.Add("User-Agent", "PenumbraModForwarder");
         request.Headers.Add("Accept", "application/vnd.github.v3+json");
 
@@ -77,9 +80,7 @@ public class StaticResourceService : IStaticResourceService
         var updaterInfo = JsonConvert.DeserializeObject<GithubStaticResources.UpdaterInformationJson>(decodedJson);
         
         var folderPath = Path.GetDirectoryName(path) ?? string.Empty;
-
-        // Use refs/heads/main to ensure the correct raw paths
-        var rawUrlBase = "https://raw.githubusercontent.com/ErrorDodo/PenumbraModForwarder-Static-Resources/refs/heads/main/";
+        var rawUrlBase = "https://raw.githubusercontent.com/CouncilOfTsukuyomi/StaticResources/refs/heads/main/";
 
         if (updaterInfo?.Backgrounds?.Images != null)
         {
@@ -87,13 +88,11 @@ public class StaticResourceService : IStaticResourceService
 
             for (int i = 0; i < imagesList.Count; i++)
             {
-                // Trim './' from the beginning if present
                 if (!string.IsNullOrWhiteSpace(imagesList[i]) && imagesList[i].StartsWith("./"))
                 {
                     imagesList[i] = imagesList[i].TrimStart('.', '/');
                 }
 
-                // Build the full URL using the folder path plus the image file
                 imagesList[i] = $"{rawUrlBase}{folderPath}/{imagesList[i]}";
             }
 
