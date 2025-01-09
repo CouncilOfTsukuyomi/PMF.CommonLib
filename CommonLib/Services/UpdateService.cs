@@ -38,21 +38,21 @@ public class UpdateService : IUpdateService
         public string Name { get; set; }
     }
 
-    public async Task<List<string>> GetUpdateZipLinksAsync(string currentVersion)
+    public async Task<List<string>> GetUpdateZipLinksAsync(string currentVersion, string repository)
     {
-        _logger.Debug("Entered GetUpdateZipLinksAsync. CurrentVersion: {CurrentVersion}", currentVersion);
+        _logger.Debug("Entered `GetUpdateZipLinksAsync`. CurrentVersion: {CurrentVersion}, Repository: {Repository}", currentVersion, repository);
 
         var includePrerelease = (bool)_configurationService.ReturnConfigValue(c => c.Common.IncludePrereleases);
         _logger.Debug("IncludePrerelease: {IncludePrerelease}", includePrerelease);
 
-        var latestRelease = await GetLatestReleaseAsync(includePrerelease);
+        var latestRelease = await GetLatestReleaseAsync(includePrerelease, repository);
         if (latestRelease == null)
         {
             _logger.Debug("No GitHub releases found. Returning an empty list.");
             return new List<string>();
         }
 
-        _logger.Debug("Latest release found: {TagName}. Checking if it is newer than currentVersion.", latestRelease.TagName);
+        _logger.Debug("Latest release found: {TagName}. Checking if it is newer than current version.", latestRelease.TagName);
 
         if (IsVersionGreater(latestRelease.TagName, currentVersion))
         {
@@ -71,34 +71,34 @@ public class UpdateService : IUpdateService
         return new List<string>();
     }
 
-    public async Task<bool> NeedsUpdateAsync(string currentVersion)
+    public async Task<bool> NeedsUpdateAsync(string currentVersion, string repository)
     {
-        _logger.Debug("Entered NeedsUpdateAsync. CurrentVersion: {CurrentVersion}", currentVersion);
+        _logger.Debug("Entered `NeedsUpdateAsync`. CurrentVersion: {CurrentVersion}, Repository: {Repository}", currentVersion, repository);
 
         var includePrerelease = (bool)_configurationService.ReturnConfigValue(c => c.Common.IncludePrereleases);
         _logger.Debug("IncludePrerelease: {IncludePrerelease}", includePrerelease);
 
-        var latestRelease = await GetLatestReleaseAsync(includePrerelease);
+        var latestRelease = await GetLatestReleaseAsync(includePrerelease, repository);
         if (latestRelease == null)
         {
-            _logger.Debug("No GitHub releases returned. No update needed.");
+            _logger.Debug("No releases returned. No update needed.");
             return false;
         }
 
         var result = IsVersionGreater(latestRelease.TagName, currentVersion);
-        _logger.Debug("IsVersionGreater returned {Result} for latest release {TagName}", result, latestRelease.TagName);
+        _logger.Debug("`IsVersionGreater` returned {Result} for latest release {TagName}", result, latestRelease.TagName);
 
         return result;
     }
 
-    public async Task<string> GetMostRecentVersionAsync()
+    public async Task<string> GetMostRecentVersionAsync(string repository)
     {
-        _logger.Debug("Entered GetMostRecentVersionAsync.");
+        _logger.Debug("Entered `GetMostRecentVersionAsync`. Repository: {Repository}", repository);
 
         var includePrerelease = (bool)_configurationService.ReturnConfigValue(c => c.Common.IncludePrereleases);
         _logger.Debug("IncludePrerelease: {IncludePrerelease}", includePrerelease);
 
-        var latestRelease = await GetLatestReleaseAsync(includePrerelease);
+        var latestRelease = await GetLatestReleaseAsync(includePrerelease, repository);
         if (latestRelease == null)
         {
             _logger.Debug("No releases found. Returning empty string.");
@@ -107,7 +107,6 @@ public class UpdateService : IUpdateService
 
         _logger.Debug("Latest release version found: {TagName}", latestRelease.TagName);
 
-        // If it's a prerelease, return the version number with "-b" appended
         if (latestRelease.Prerelease)
         {
             _logger.Debug("Release is a prerelease. Returning {TagName}-b.", latestRelease.TagName);
@@ -117,17 +116,18 @@ public class UpdateService : IUpdateService
         return latestRelease.TagName;
     }
 
-    private async Task<GitHubRelease?> GetLatestReleaseAsync(bool includePrerelease)
+    private async Task<GitHubRelease?> GetLatestReleaseAsync(bool includePrerelease, string repository)
     {
-        _logger.Debug("Entered GetLatestReleaseAsync. includePrerelease: {IncludePrerelease}", includePrerelease);
+        _logger.Debug("Entered `GetLatestReleaseAsync`. IncludePrerelease: {IncludePrerelease}, Repository: {Repository}", includePrerelease, repository);
 
         using var httpClient = new HttpClient();
         httpClient.DefaultRequestHeaders.UserAgent.Add(
             new ProductInfoHeaderValue("PenumbraModForwarder", "1.0"));
 
-        const string url = "https://api.github.com/repos/Sebane1/PenumbraModForwarder/releases";
-        using var response = await httpClient.GetAsync(url);
+        var url = $"https://api.github.com/repos/{repository}/releases";
+        _logger.Debug("Full releases URL: {Url}", url);
 
+        using var response = await httpClient.GetAsync(url);
         _logger.Debug("GitHub releases GET request completed with status code {StatusCode}", response.StatusCode);
 
         var releases = await response.Content.ReadAsJsonAsync<List<GitHubRelease>>();
@@ -150,7 +150,7 @@ public class UpdateService : IUpdateService
         }
         else
         {
-            _logger.Debug("Using release with tag_name {TagName}", latestRelease.TagName);
+            _logger.Debug("Using release with `tag_name` {TagName}", latestRelease.TagName);
         }
 
         return latestRelease;
@@ -158,7 +158,7 @@ public class UpdateService : IUpdateService
 
     private bool IsVersionGreater(string newVersion, string oldVersion)
     {
-        _logger.Debug("IsVersionGreater check. New: {NewVersion}, Old: {OldVersion}", newVersion, oldVersion);
+        _logger.Debug("`IsVersionGreater` check. New: {NewVersion}, Old: {OldVersion}", newVersion, oldVersion);
 
         if (string.IsNullOrWhiteSpace(newVersion) || string.IsNullOrWhiteSpace(oldVersion))
         {
@@ -170,7 +170,7 @@ public class UpdateService : IUpdateService
         var splittedOld = oldVersion.Split('.');
         if (splittedNew.Length != 3 || splittedOld.Length != 3)
         {
-            _logger.Debug("Version not in x.x.x format. Reverting to ordinal compare.");
+            _logger.Debug("Version not in x.x.x format. Using ordinal compare.");
             return string.CompareOrdinal(newVersion, oldVersion) > 0;
         }
 

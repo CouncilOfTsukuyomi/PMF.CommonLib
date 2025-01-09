@@ -2,7 +2,7 @@
 
 public interface IUpdateService
 {
-    Task<List<string>> GetUpdateZipLinksAsync(string currentVersion);
-    Task<bool> NeedsUpdateAsync(string currentVersion);
-    Task<string> GetMostRecentVersionAsync();
+    Task<List<string>> GetUpdateZipLinksAsync(string currentVersion, string repository);
+    Task<bool> NeedsUpdateAsync(string currentVersion, string repository);
+    Task<string> GetMostRecentVersionAsync(string repository);
 }

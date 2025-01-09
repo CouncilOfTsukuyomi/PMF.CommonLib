@@ -45,7 +45,7 @@ public class StaticResourceService : IStaticResourceService
         var request = new HttpRequestMessage(
             HttpMethod.Get,
             $"{GitHubApiBaseUrl}information.json{GitHubApiRefQuery}");
-        request.Headers.Add("User-Agent", "PenumbraModForwarder");
+        request.Headers.Add("User-Agent", "Updater");
         request.Headers.Add("Accept", "application/vnd.github.v3+json");
 
         var response = await _httpClient.SendAsync(request);
@@ -65,7 +65,7 @@ public class StaticResourceService : IStaticResourceService
         var request = new HttpRequestMessage(
             HttpMethod.Get,
             $"{GitHubApiBaseUrl}{path}{GitHubApiRefQuery}");
-        request.Headers.Add("User-Agent", "PenumbraModForwarder");
+        request.Headers.Add("User-Agent", "Updater");
         request.Headers.Add("Accept", "application/vnd.github.v3+json");
 
         var response = await _httpClient.SendAsync(request);

@@ -12,26 +12,29 @@ public class DownloadAndInstallUpdates : IDownloadAndInstallUpdates
     private readonly IAria2Service _aria2Service;
     private readonly IUpdateService _updateService;
 
-    public DownloadAndInstallUpdates(IAria2Service aria2Service, IUpdateService updateService)
+    // Add a private field to store the repo name.
+    private readonly string _repository;
+
+    public DownloadAndInstallUpdates(
+        IAria2Service aria2Service, 
+        IUpdateService updateService,
+        string repository)
     {
         _aria2Service = aria2Service;
         _updateService = updateService;
+        _repository = repository;
     }
 
-    /// <summary>
-    /// Checks for a newer release, downloads any OS-compatible .zip file(s) to a temp directory,
-    /// and calls ExtractZipsAsync for final installation. Returns a tuple:
-    /// (true, path) if successful, otherwise (false, "").
-    /// </summary>
-    /// <param name="currentVersion">The currently installed version (e.g. "1.0.0").</param>
-    /// <returns>(success, downloadPath)</returns>
     public async Task<(bool success, string downloadPath)> DownloadAndInstallAsync(string currentVersion)
     {
         try
         {
-            _logger.Info("Checking if update is needed for version {Version}", currentVersion);
+            // Include the repository in your logging
+            _logger.Info("Checking if update is needed for version {Version} in repo {Repository}",
+                currentVersion, _repository);
 
-            var needsUpdate = await _updateService.NeedsUpdateAsync(currentVersion);
+            // Call NeedsUpdateAsync with the repository
+            var needsUpdate = await _updateService.NeedsUpdateAsync(currentVersion, _repository);
             if (!needsUpdate)
             {
                 _logger.Info("No update needed. Current version is up-to-date.");
@@ -41,28 +44,30 @@ public class DownloadAndInstallUpdates : IDownloadAndInstallUpdates
             var tempDir = Path.Combine(Path.GetTempPath(), "PenumbraModForwarder", "Updates");
             Directory.CreateDirectory(tempDir);
 
-            var zipUrls = await _updateService.GetUpdateZipLinksAsync(currentVersion);
+            // Get the zip links passing the repository param
+            var zipUrls = await _updateService.GetUpdateZipLinksAsync(currentVersion, _repository);
             if (zipUrls.Count == 0)
             {
-                _logger.Warn("No .zip assets found for the latest release. Update cannot proceed.");
+                _logger.Warn("No .zip assets found for the latest release in {Repository}. Update cannot proceed.",
+                    _repository);
                 return (false, string.Empty);
             }
 
             var osFilteredUrls = zipUrls.Where(IsOsCompatibleAsset).ToList();
             if (osFilteredUrls.Count == 0)
             {
-                _logger.Warn("No assets matching the current OS were found.");
+                _logger.Warn("No assets matching the current OS were found in {Repository}.", _repository);
                 return (false, string.Empty);
             }
 
             var downloadedPaths = new List<string>();
             foreach (var url in osFilteredUrls)
             {
-                _logger.Info("Starting download for {Url}", url);
+                _logger.Info("Starting download for {Url} from {Repository}", url, _repository);
                 var success = await _aria2Service.DownloadFileAsync(url, tempDir, CancellationToken.None);
                 if (!success)
                 {
-                    _logger.Error("Failed to download {Url}. Aborting update.", url);
+                    _logger.Error("Failed to download {Url} from {Repository}. Aborting update.", url, _repository);
                     return (false, string.Empty);
                 }
 
@@ -76,29 +81,22 @@ public class DownloadAndInstallUpdates : IDownloadAndInstallUpdates
                 var extractOk = await ExtractZipsAsync(zipPath, tempDir, CancellationToken.None);
                 if (!extractOk)
                 {
-                    _logger.Error("Failed to extract {ZipPath}. Aborting update.", zipPath);
+                    _logger.Error("Failed to extract {ZipPath} from {Repository}. Aborting update.", zipPath, _repository);
                     return (false, string.Empty);
                 }
             }
 
-            _logger.Info("All OS-compatible .zip assets have been downloaded and extracted to {Directory}", tempDir);
+            _logger.Info("All OS-compatible .zip assets have been downloaded and extracted to {Directory} for {Repository}",
+                tempDir, _repository);
             return (true, tempDir);
         }
         catch (Exception ex)
         {
-            _logger.Error(ex, "An error occurred while downloading and installing updates.");
+            _logger.Error(ex, "An error occurred while downloading and installing updates for {Repository}", _repository);
             return (false, string.Empty);
         }
     }
 
-    /// <summary>
-    /// Extracts a given zip file into the specified directory, then removes the zip file.
-    /// Uses the custom ArchiveFile class for extraction.
-    /// </summary>
-    /// <param name="zipPath">Path to the zip file.</param>
-    /// <param name="extractFolder">Folder to which the contents are extracted.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>True if extraction succeeded, otherwise false.</returns>
     private async Task<bool> ExtractZipsAsync(string zipPath, string extractFolder, CancellationToken ct)
     {
         try
@@ -109,19 +107,15 @@ public class DownloadAndInstallUpdates : IDownloadAndInstallUpdates
                 return false;
             }
 
-            // Mimic some async boundary
             await Task.Yield();
 
             using (var archiveFile = new ArchiveFile(zipPath))
             {
-                // Extracts all files to the specified folder, overwriting if needed
                 archiveFile.Extract(extractFolder, overwrite: true);
             }
 
-            // Delete the zip after extraction
             File.Delete(zipPath);
             _logger.Info("Extracted and deleted {ZipPath}", zipPath);
-
             return true;
         }
         catch (Exception ex)
@@ -131,18 +125,13 @@ public class DownloadAndInstallUpdates : IDownloadAndInstallUpdates
         }
     }
 
-    /// <summary>
-    /// Determines if the asset URL contains an OS-specific token (e.g., Winx64 or Linux).
-    /// </summary>
     private bool IsOsCompatibleAsset(string assetUrl)
     {
         var fileName = assetUrl.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? string.Empty;
 
-        // For Windows
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            return fileName.Contains("Winx64", StringComparison.OrdinalIgnoreCase);
+            return fileName.Contains("Windows", StringComparison.OrdinalIgnoreCase);
 
-        // For Linux-like
         return fileName.Contains("Linux", StringComparison.OrdinalIgnoreCase);
     }
 }
