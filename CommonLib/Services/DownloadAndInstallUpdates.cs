@@ -41,7 +41,7 @@ public class DownloadAndInstallUpdates : IDownloadAndInstallUpdates
                 return (false, string.Empty);
             }
 
-            var tempDir = Path.Combine(Path.GetTempPath(), "PenumbraModForwarder", "Updates");
+            var tempDir = Path.Combine(Path.GetTempPath(), "Council Of Tsukuyomi", "Updates");
             Directory.CreateDirectory(tempDir);
 
             // Get the zip links passing the repository param
