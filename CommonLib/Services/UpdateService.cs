@@ -17,7 +17,7 @@ public class UpdateService : IUpdateService
         _configurationService = configurationService;
     }
 
-    private class GitHubRelease
+    public class GitHubRelease
     {
         [JsonProperty("tag_name")]
         public string TagName { get; set; }
@@ -29,7 +29,7 @@ public class UpdateService : IUpdateService
         public List<GitHubAsset> Assets { get; set; }
     }
 
-    private class GitHubAsset
+    public class GitHubAsset
     {
         [JsonProperty("browser_download_url")]
         public string BrowserDownloadUrl { get; set; }
@@ -116,13 +116,13 @@ public class UpdateService : IUpdateService
         return latestRelease.TagName;
     }
 
-    private async Task<GitHubRelease?> GetLatestReleaseAsync(bool includePrerelease, string repository)
+    public async Task<GitHubRelease?> GetLatestReleaseAsync(bool includePrerelease, string repository)
     {
         _logger.Debug("Entered `GetLatestReleaseAsync`. IncludePrerelease: {IncludePrerelease}, Repository: {Repository}", includePrerelease, repository);
 
         using var httpClient = new HttpClient();
         httpClient.DefaultRequestHeaders.UserAgent.Add(
-            new ProductInfoHeaderValue("PenumbraModForwarder", "1.0"));
+            new ProductInfoHeaderValue("CouncilOfTsukuyomi", "1.0"));
 
         var url = $"https://api.github.com/repos/{repository}/releases";
         _logger.Debug("Full releases URL: {Url}", url);
