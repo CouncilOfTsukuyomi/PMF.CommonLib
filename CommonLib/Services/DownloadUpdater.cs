@@ -19,6 +19,7 @@ public class DownloadUpdater : IDownloadUpdater
     public async Task<string?> DownloadAndExtractLatestUpdaterAsync(CancellationToken ct)
     {
         _logger.Debug("Entered `DownloadAndExtractLatestUpdaterAsync`...");
+        await _aria2Service.EnsureAria2AvailableAsync(ct).ConfigureAwait(false);
 
         var latestRelease = await _updateService.GetLatestReleaseAsync(false, "CouncilOfTsukuyomi/Updater");
         if (latestRelease == null)

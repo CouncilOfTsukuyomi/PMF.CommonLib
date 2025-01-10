@@ -41,6 +41,8 @@ public class DownloadAndInstallUpdates : IDownloadAndInstallUpdates
                 return (false, string.Empty);
             }
 
+            await _aria2Service.EnsureAria2AvailableAsync(CancellationToken.None).ConfigureAwait(false);
+
             var tempDir = Path.Combine(Path.GetTempPath(), "Council Of Tsukuyomi", "Updates");
             Directory.CreateDirectory(tempDir);
 
