@@ -11,6 +11,12 @@ public class Aria2Service : IAria2Service
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
 
+    // Used to control concurrent access to the installation logic
+    private readonly object _syncLock = new();
+
+    // Holds the running task (if any) for installing or verifying aria2
+    private Task<bool>? _ensureAria2Task;
+
     private bool _aria2Ready;
     private const string Aria2LatestReleaseApi = "https://api.github.com/repos/aria2/aria2/releases/latest";
 
@@ -19,40 +25,53 @@ public class Aria2Service : IAria2Service
 
     public Aria2Service(string aria2InstallFolder)
     {
+        // Store folder path, but do NOT automatically start downloading in constructor
+        // to avoid competing tasks. The actual check will happen when needed.
         Aria2Folder = aria2InstallFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        // Begin ensuring aria2 is installed asynchronously
-        _ = EnsureAria2AvailableAsync(CancellationToken.None);
     }
 
     public async Task<bool> EnsureAria2AvailableAsync(CancellationToken ct)
     {
-        if (_aria2Ready) 
+        // If already installed/ready, return immediately
+        if (_aria2Ready)
             return true;
 
+        // If not Windows, abort here
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             _logger.Warn("Service is only supported on Windows platforms in this implementation.");
             return false;
         }
 
-        if (!File.Exists(Aria2ExePath))
+        // Use a lock to ensure only one installation or check runs at a time
+        lock (_syncLock)
         {
-            _logger.Info("aria2 not found at '{Path}'. Checking the latest release on GitHub...", Aria2ExePath);
-            var installed = await DownloadAndInstallAria2FromLatestAsync(ct);
-            _aria2Ready = installed;
-            return installed;
+            // If there's no in-progress task, create one
+            if (_ensureAria2Task == null)
+            {
+                _ensureAria2Task = InternalEnsureAria2AvailableAsync(ct);
+            }
         }
 
-        _logger.Info("aria2 located at {Path}", Aria2ExePath);
-        _aria2Ready = true;
-        return true;
+        // Await the task outside the lock
+        var installed = await _ensureAria2Task.ConfigureAwait(false);
+
+        // If installation failed, reset the task so we can retry later
+        if (!installed)
+        {
+            lock (_syncLock)
+            {
+                _ensureAria2Task = null;
+            }
+        }
+
+        return installed;
     }
 
     public async Task<bool> DownloadFileAsync(string fileUrl, string downloadDirectory, CancellationToken ct)
     {
-        var isReady = await EnsureAria2AvailableAsync(ct);
-        if (!isReady) 
+        var isReady = await EnsureAria2AvailableAsync(ct).ConfigureAwait(false);
+        if (!isReady)
             return false;
 
         try
@@ -67,8 +86,6 @@ public class Aria2Service : IAria2Service
                 rawFileName = "download.bin";
 
             var finalFileName = Uri.UnescapeDataString(rawFileName);
-
-            // Add extra arguments if desired
             var extraAria2Args = "--log-level=debug";
 
             var arguments = $"\"{fileUrl}\" --dir=\"{sanitizedDirectory}\" --out=\"{finalFileName}\" {extraAria2Args}";
@@ -98,10 +115,10 @@ public class Aria2Service : IAria2Service
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromMinutes(30));
 
-            await process.WaitForExitAsync(timeoutCts.Token);
+            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
 
-            var stdOut = await stdOutTask;
-            var stdErr = await stdErrTask;
+            var stdOut = await stdOutTask.ConfigureAwait(false);
+            var stdErr = await stdErrTask.ConfigureAwait(false);
 
             if (!string.IsNullOrWhiteSpace(stdOut))
             {
@@ -138,6 +155,23 @@ public class Aria2Service : IAria2Service
         }
     }
 
+    // Internal method that does the actual check and optional install
+    private async Task<bool> InternalEnsureAria2AvailableAsync(CancellationToken ct)
+    {
+        // If the binary doesn't exist, attempt to download/install
+        if (!File.Exists(Aria2ExePath))
+        {
+            _logger.Info("aria2 not found at '{Path}'. Checking the latest release on GitHub...", Aria2ExePath);
+            var installed = await DownloadAndInstallAria2FromLatestAsync(ct).ConfigureAwait(false);
+            _aria2Ready = installed;
+            return installed;
+        }
+
+        _logger.Info("aria2 located at {Path}", Aria2ExePath);
+        _aria2Ready = true;
+        return true;
+    }
+
     private async Task<bool> DownloadAndInstallAria2FromLatestAsync(CancellationToken ct)
     {
         try
@@ -147,7 +181,7 @@ public class Aria2Service : IAria2Service
                 Directory.CreateDirectory(Aria2Folder);
             }
 
-            var downloadUrl = await FetchWin64AssetUrlAsync(ct);
+            var downloadUrl = await FetchWin64AssetUrlAsync(ct).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(downloadUrl))
             {
                 _logger.Error("No matching Windows 64-bit asset URL found. Cannot install aria2.");
@@ -159,13 +193,14 @@ public class Aria2Service : IAria2Service
             using (var client = new HttpClient())
             {
                 client.DefaultRequestHeaders.Add("User-Agent", "PenumbraModForwarder/Aria2Service");
-                var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
+                var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, ct)
+                                           .ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
                 _logger.Info("Downloading aria2 from {Url}", downloadUrl);
 
                 await using var fs = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None);
-                await response.Content.CopyToAsync(fs, ct);
+                await response.Content.CopyToAsync(fs, ct).ConfigureAwait(false);
             }
 
             _logger.Info("Extracting aria2 files to {ExtractPath}", Aria2Folder);
@@ -242,7 +277,7 @@ public class Aria2Service : IAria2Service
             using var client = new HttpClient();
             client.DefaultRequestHeaders.Add("User-Agent", "PenumbraModForwarder/Aria2Service");
 
-            var json = await client.GetStringAsync(Aria2LatestReleaseApi, ct);
+            var json = await client.GetStringAsync(Aria2LatestReleaseApi, ct).ConfigureAwait(false);
             var doc = JToken.Parse(json);
 
             if (doc["assets"] is not JArray assetsArray)
