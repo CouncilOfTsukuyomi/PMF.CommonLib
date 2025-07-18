@@ -17,4 +17,6 @@ public class CommonConfigurationModel
     public bool EnableSentry { get; set; }
     [ExcludeFromSettingsUI]
     public bool UserChoseSentry { get; set; }
+    [ExcludeFromSettingsUI] 
+    public bool FirstRunComplete { get; set; } = false;
 }
