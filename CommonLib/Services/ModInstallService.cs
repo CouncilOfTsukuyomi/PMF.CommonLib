@@ -45,7 +45,6 @@ public class ModInstallService : IModInstallService
                 _logger.Debug("Using PenumbraService for .pmp mod: {Path}", finalPath);
                 _penumbraService.InitializePenumbraPath();
                 var installedFolderPath = _penumbraService.InstallMod(finalPath);
-
                 var modName = Path.GetFileName(installedFolderPath);
                 try
                 {

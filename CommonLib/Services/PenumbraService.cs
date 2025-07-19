@@ -1,4 +1,5 @@
-﻿using CommonLib.Interfaces;
+﻿using System.Runtime.InteropServices;
+using CommonLib.Interfaces;
 using CommonLib.Models;
 using Newtonsoft.Json;
 using NLog;
@@ -24,6 +25,12 @@ public class PenumbraService : IPenumbraService
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "XIVLauncherCN",
+            "pluginConfigs",
+            "Penumbra.json"
+        ),
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".xlcore",
             "pluginConfigs",
             "Penumbra.json"
         )
@@ -78,49 +85,50 @@ public class PenumbraService : IPenumbraService
         }
 
         var destinationFolderName = Path.GetFileNameWithoutExtension(sourceFilePath);
-        using (var archiveForMeta = new ArchiveFile(sourceFilePath))
-        {
-            var metaEntry = archiveForMeta.Entries.FirstOrDefault(
-                e => e?.FileName?.Equals("meta.json", StringComparison.OrdinalIgnoreCase) == true
-            );
-
-            if (metaEntry != null)
+            using (var archiveForMeta = new ArchiveFile(sourceFilePath))
             {
-                var tempMetaFilePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
-                archiveForMeta.Extract(entry =>
-                {
-                    if (ReferenceEquals(entry, metaEntry))
-                        return tempMetaFilePath;
-                    return null;
-                });
+                var metaEntry = archiveForMeta.Entries.FirstOrDefault(e =>
+                    e?.FileName?.Equals("meta.json", StringComparison.OrdinalIgnoreCase) == true
+                );
 
-                try
+                if (metaEntry != null)
                 {
-                    var metaContent = _fileStorage.Read(tempMetaFilePath);
-                    var meta = JsonConvert.DeserializeObject<PmpMeta>(metaContent);
-
-                    if (!string.IsNullOrWhiteSpace(meta?.Name))
+                    var tempMetaFilePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
+                    archiveForMeta.Extract(entry =>
                     {
-                        destinationFolderName = meta.Name;
+                        if (ReferenceEquals(entry, metaEntry))
+                            return tempMetaFilePath;
+                        return null;
+                    });
+
+                    try
+                    {
+                        var metaContent = _fileStorage.Read(tempMetaFilePath);
+                        var meta = JsonConvert.DeserializeObject<PmpMeta>(metaContent);
+
+                        if (!string.IsNullOrWhiteSpace(meta?.Name))
+                        {
+                            destinationFolderName = meta.Name;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Warn(ex, "Failed to parse meta.json in {SourceFile}; using default folder name.",
+                            sourceFilePath);
+                    }
+                    finally
+                    {
+                        if (_fileStorage.Exists(tempMetaFilePath))
+                        {
+                            _fileStorage.Delete(tempMetaFilePath);
+                        }
                     }
                 }
-                catch (Exception ex)
+                else
                 {
-                    _logger.Warn(ex, "Failed to parse meta.json in {SourceFile}; using default folder name.", sourceFilePath);
-                }
-                finally
-                {
-                    if (_fileStorage.Exists(tempMetaFilePath))
-                    {
-                        _fileStorage.Delete(tempMetaFilePath);
-                    }
+                    _logger.Warn("No meta.json found in {SourceFile}; using default folder name.", sourceFilePath);
                 }
             }
-            else
-            {
-                _logger.Warn("No meta.json found in {SourceFile}; using default folder name.", sourceFilePath);
-            }
-        }
 
         destinationFolderName = RemoveInvalidPathChars(destinationFolderName);
 
@@ -282,12 +290,20 @@ public class PenumbraService : IPenumbraService
 
         return string.Empty;
     }
-
+    
+    private static string WineToRealPath(string winePath) =>
+        winePath.StartsWith("Z:\\") ? winePath.Substring(2).Replace('\\', '/') : winePath;
     private string ExtractPathFromJson(string jsonFilePath)
     {
         var fileContent = _fileStorage.Read(jsonFilePath);
         var penumbraData = JsonConvert.DeserializeObject<PenumbraModPath>(fileContent);
-        return penumbraData?.ModDirectory ?? string.Empty;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            return WineToRealPath(penumbraData?.ModDirectory ?? string.Empty);
+        }
+        {
+            return penumbraData?.ModDirectory ?? string.Empty;
+        }
     }
 
     private void UpdatePenumbraPathInConfiguration(string foundPath)
