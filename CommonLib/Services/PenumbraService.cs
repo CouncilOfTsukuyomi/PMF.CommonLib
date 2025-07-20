@@ -1,8 +1,9 @@
-﻿using CommonLib.Interfaces;
+﻿using System.Runtime.InteropServices;
+using System.IO.Compression;
+using CommonLib.Interfaces;
 using CommonLib.Models;
 using Newtonsoft.Json;
 using NLog;
-using SevenZipExtractor;
 
 namespace CommonLib.Services;
 
@@ -24,6 +25,12 @@ public class PenumbraService : IPenumbraService
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "XIVLauncherCN",
+            "pluginConfigs",
+            "Penumbra.json"
+        ),
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".xlcore",
             "pluginConfigs",
             "Penumbra.json"
         )
@@ -78,24 +85,22 @@ public class PenumbraService : IPenumbraService
         }
 
         var destinationFolderName = Path.GetFileNameWithoutExtension(sourceFilePath);
-        using (var archiveForMeta = new ArchiveFile(sourceFilePath))
+        
+        using (var zipArchive = ZipFile.OpenRead(sourceFilePath))
         {
-            var metaEntry = archiveForMeta.Entries.FirstOrDefault(
-                e => e?.FileName?.Equals("meta.json", StringComparison.OrdinalIgnoreCase) == true
+            var metaEntry = zipArchive.Entries.FirstOrDefault(e =>
+                e.FullName.Equals("meta.json", StringComparison.OrdinalIgnoreCase) ||
+                e.FullName.EndsWith("/meta.json", StringComparison.OrdinalIgnoreCase) ||
+                e.FullName.EndsWith("\\meta.json", StringComparison.OrdinalIgnoreCase)
             );
 
             if (metaEntry != null)
             {
                 var tempMetaFilePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
-                archiveForMeta.Extract(entry =>
-                {
-                    if (ReferenceEquals(entry, metaEntry))
-                        return tempMetaFilePath;
-                    return null;
-                });
-
+                
                 try
                 {
+                    metaEntry.ExtractToFile(tempMetaFilePath, overwrite: true);
                     var metaContent = _fileStorage.Read(tempMetaFilePath);
                     var meta = JsonConvert.DeserializeObject<PmpMeta>(metaContent);
 
@@ -106,7 +111,7 @@ public class PenumbraService : IPenumbraService
                 }
                 catch (Exception ex)
                 {
-                    _logger.Warn(ex, "Failed to parse meta.json in {SourceFile}; using default folder name.", sourceFilePath);
+                    _logger.Warn("No meta.json found in {SourceFile}; using default folder name.", sourceFilePath);
                 }
                 finally
                 {
@@ -123,8 +128,8 @@ public class PenumbraService : IPenumbraService
         }
 
         destinationFolderName = RemoveInvalidPathChars(destinationFolderName);
-
         var destinationFolderPath = Path.Combine(penumbraPath, destinationFolderName);
+        
         if (!_fileStorage.Exists(destinationFolderPath))
         {
             _fileStorage.CreateDirectory(destinationFolderPath);
@@ -142,33 +147,33 @@ public class PenumbraService : IPenumbraService
                 _logger.Info("Retrying extraction attempt {Attempt} for {SourceFile}", attempt, sourceFilePath);
                 ClearDirectory(destinationFolderPath);
             }
-            
-            using (var archive = new ArchiveFile(sourceFilePath))
+
+            using (var zipArchive = ZipFile.OpenRead(sourceFilePath))
             {
-                archive.Extract(entry =>
+                var expectedFileCount = zipArchive.Entries.Count(e => !string.IsNullOrEmpty(e.Name));
+                var extractedFileCount = 0;
+
+                foreach (var entry in zipArchive.Entries)
                 {
-                    if (entry == null)
-                        return null;
-                    return Path.Combine(destinationFolderPath, entry.FileName ?? string.Empty);
-                });
-                
-                ProcessBakFiles(destinationFolderPath);
-                extractionSuccessful = true;
-            }
+                    if (string.IsNullOrEmpty(entry.Name))
+                        continue;
 
-            using (var archive = new ArchiveFile(sourceFilePath))
-            {
-                var expectedFiles = archive.Entries
-                    .Where(e => e != null && !string.IsNullOrEmpty(e.FileName))
-                    .Select(e => Path.Combine(destinationFolderPath, e.FileName))
-                    .ToList();
+                    var destinationPath = Path.Combine(destinationFolderPath, entry.FullName);
 
-                var allFilesExtracted = expectedFiles.All(file => _fileStorage.Exists(file));
+                    var destinationDir = Path.GetDirectoryName(destinationPath);
+                    if (!string.IsNullOrEmpty(destinationDir) && !_fileStorage.Exists(destinationDir))
+                    {
+                        _fileStorage.CreateDirectory(destinationDir);
+                    }
 
-                if (allFilesExtracted && expectedFiles.Count > 0)
+                    entry.ExtractToFile(destinationPath, overwrite: true);
+                    extractedFileCount++;
+                }
+
+                if (extractedFileCount == expectedFileCount && expectedFileCount > 0)
                 {
+                    ProcessBakFiles(destinationFolderPath);
                     extractionSuccessful = true;
-                    break;
                 }
                 else
                 {
@@ -282,12 +287,20 @@ public class PenumbraService : IPenumbraService
 
         return string.Empty;
     }
-
+    
+    private static string WineToRealPath(string winePath) =>
+        winePath.StartsWith("Z:\\") ? winePath.Substring(2).Replace('\\', '/') : winePath;
     private string ExtractPathFromJson(string jsonFilePath)
     {
         var fileContent = _fileStorage.Read(jsonFilePath);
         var penumbraData = JsonConvert.DeserializeObject<PenumbraModPath>(fileContent);
-        return penumbraData?.ModDirectory ?? string.Empty;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            return WineToRealPath(penumbraData?.ModDirectory ?? string.Empty);
+        }
+        {
+            return penumbraData?.ModDirectory ?? string.Empty;
+        }
     }
 
     private void UpdatePenumbraPathInConfiguration(string foundPath)

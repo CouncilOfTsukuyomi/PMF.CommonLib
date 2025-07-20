@@ -22,15 +22,23 @@ public class FileSystemHelper : IFileSystemHelper
             standardPaths.Add(Path.Combine(programFiles, "FFXIV TexTools", "FFXIV_TexTools", "ConsoleTools.exe"));
             standardPaths.Add(Path.Combine(programFilesX86, "FFXIV TexTools", "FFXIV_TexTools", "ConsoleTools.exe"));
         }
-        //TODO: These need to be double checked
-        else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+
+        else if (OperatingSystem.IsLinux())
         {
-            // Add standard Unix-based installation paths
+            // Path used on a commonly used Linux install script.
+            standardPaths.Add(Path.Combine("opt", "tt", "consoletools"));
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            // TODO: These need to be double checked
+            // Add standard Mac installation paths
             standardPaths.Add("/usr/local/bin/FFXIV_TexTools/ConsoleTools");
             standardPaths.Add("/usr/bin/FFXIV_TexTools/ConsoleTools");
             // Add other common paths as needed
         }
 
-        return standardPaths;
+
+
+    return standardPaths;
     }
 }
