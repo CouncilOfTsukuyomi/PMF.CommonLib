@@ -12,4 +12,5 @@ public interface IUpdateService
     Task<UpdateService.GitHubRelease?> GetLatestReleaseAsync(bool includePrerelease, string repository);
     Task<List<VersionInfo>> GetAllVersionInfoSinceCurrentAsync(string currentVersion, string repository);
     Task<string> GetConsolidatedChangelogSinceCurrentAsync(string currentVersion, string repository);
+    Task<(bool IsValid, string ErrorMessage)> ValidateReleaseAuthorAsync(UpdateService.GitHubRelease release, string repository);
 }

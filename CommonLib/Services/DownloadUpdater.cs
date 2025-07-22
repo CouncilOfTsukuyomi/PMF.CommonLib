@@ -39,6 +39,24 @@ public class DownloadUpdater : IDownloadUpdater
                 return null;
             }
 
+            _logger.Debug("Validating updater release author for security...");
+            progress?.Report(new DownloadProgress { Status = "Validating updater security...", PercentComplete = 15 });
+            
+            var (isValid, errorMessage) = await _updateService.ValidateReleaseAuthorAsync(latestRelease, "CouncilOfTsukuyomi/Updater");
+            if (!isValid)
+            {
+                _logger.Error("SECURITY ALERT: Updater download blocked - {SecurityError}", errorMessage);
+                progress?.Report(new DownloadProgress { Status = "Security validation failed - updater blocked", PercentComplete = 0 });
+                
+                throw new UpdateService.SecurityException(errorMessage, 
+                    latestRelease.Author?.Login ?? "unknown", 
+                    latestRelease.TagName, 
+                    "CouncilOfTsukuyomi/Updater");
+            }
+
+            _logger.Info("Updater release security validation passed for version {Version} by trusted author {Author}", 
+                latestRelease.TagName, latestRelease.Author?.Login);
+
             if (latestRelease.Assets == null || latestRelease.Assets.Count == 0)
             {
                 _logger.Warn("Release found, but no assets available for download. Aborting.");
@@ -55,11 +73,10 @@ public class DownloadUpdater : IDownloadUpdater
                 return null;
             }
 
-            _logger.Info("Found updater asset: {Name}, Download URL: {Url}", zipAsset.Name, zipAsset.BrowserDownloadUrl);
+            _logger.Info("Found TRUSTED updater asset: {Name}, Download URL: {Url}", zipAsset.Name, zipAsset.BrowserDownloadUrl);
 
-            progress?.Report(new DownloadProgress { Status = "Preparing download...", PercentComplete = 20 });
+            progress?.Report(new DownloadProgress { Status = "Preparing trusted updater download...", PercentComplete = 20 });
 
-            // Create or obtain a download directory (could be a temp folder)
             var downloadFolder = Path.Combine(Path.GetTempPath(), "Council Of Tsukuyomi");
             if (!Directory.Exists(downloadFolder))
             {
@@ -67,9 +84,8 @@ public class DownloadUpdater : IDownloadUpdater
                 _logger.Debug("Created temp folder at `{DownloadFolder}`.", downloadFolder);
             }
                 
-            _logger.Debug("Starting download of updater asset...");
+            _logger.Debug("Starting download of trusted updater asset...");
             
-            // Create a progress wrapper that adjusts the progress for the download phase (20-80%)
             IProgress<DownloadProgress>? downloadProgress = null;
             if (progress != null)
             {
@@ -88,16 +104,14 @@ public class DownloadUpdater : IDownloadUpdater
                 progress?.Report(new DownloadProgress { Status = "Download failed", PercentComplete = 0 });
                 return null;
             }
-            _logger.Info("Updater asset download complete.");
+            _logger.Info("Trusted updater asset download complete.");
 
-            // Build path to downloaded zip
             var downloadedZipPath = Path.Combine(downloadFolder,
                 Path.GetFileName(new Uri(zipAsset.BrowserDownloadUrl).AbsolutePath));
             _logger.Debug("Local path to downloaded zip: {DownloadedZipPath}", downloadedZipPath);
 
-            progress?.Report(new DownloadProgress { Status = "Extracting updater...", PercentComplete = 85 });
+            progress?.Report(new DownloadProgress { Status = "Extracting trusted updater...", PercentComplete = 85 });
 
-            // Extract the zip in the same folder it was downloaded to
             try
             {
                 _logger.Debug("Beginning extraction of the downloaded zip.");
@@ -131,20 +145,25 @@ public class DownloadUpdater : IDownloadUpdater
                 }
             }
 
-            // Return the path to the expected updater executable
             var updaterPath = Path.Combine(downloadFolder, "Updater.exe");
             if (File.Exists(updaterPath))
             {
                 _logger.Debug("Updater.exe found at `{UpdaterPath}`. Returning path.", updaterPath);
-                progress?.Report(new DownloadProgress { Status = "Updater ready", PercentComplete = 100 });
+                progress?.Report(new DownloadProgress { Status = "Trusted updater ready", PercentComplete = 100 });
                 
-                _logger.Info("=== UPDATER DOWNLOAD COMPLETED SUCCESSFULLY ===");
+                _logger.Info("=== TRUSTED UPDATER DOWNLOAD COMPLETED SUCCESSFULLY ===");
                 return updaterPath;
             }
 
             _logger.Warn("Updater.exe not found in `{DownloadFolder}` after extraction.", downloadFolder);
             progress?.Report(new DownloadProgress { Status = "Updater executable not found", PercentComplete = 0 });
             return null;
+        }
+        catch (UpdateService.SecurityException ex)
+        {
+            _logger.Error(ex, "SECURITY VIOLATION: Updater download blocked - {SecurityError}", ex.Message);
+            progress?.Report(new DownloadProgress { Status = $"Security Alert: {ex.Message}", PercentComplete = 0 });
+            throw;
         }
         catch (Exception ex)
         {
@@ -164,10 +183,9 @@ public class DownloadUpdater : IDownloadUpdater
         _logger.Debug("Formatted Size: {FormattedSize}", individualProgress.FormattedSize);
         _logger.Debug("Status: {Status}", individualProgress.Status);
 
-        // Map download progress to overall progress (20% to 80% of total)
-        var mappedProgress = 20 + (individualProgress.PercentComplete * 0.6); // 60% of total progress for download
+        var mappedProgress = 20 + (individualProgress.PercentComplete * 0.6);
         
-        var status = $"Downloading updater... {individualProgress.FormattedSize} at {individualProgress.FormattedSpeed}";
+        var status = $"Downloading trusted updater... {individualProgress.FormattedSize} at {individualProgress.FormattedSpeed}";
 
         _logger.Debug("Calculated mapped progress: {MappedProgress}%", mappedProgress);
         _logger.Debug("Status to report: {Status}", status);

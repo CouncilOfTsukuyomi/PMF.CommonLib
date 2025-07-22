@@ -17,7 +17,7 @@ public class UpdateService : IUpdateService
     private static readonly Dictionary<string, long> TrustedAuthors = new(StringComparer.OrdinalIgnoreCase)
     {
         { "github-actions[bot]", 41898282L },
-        { "github-actions", 41898282L }
+        { "github-actions", 41898282L },
     };
 
     private static readonly HashSet<string> SuspiciousPatterns = new(StringComparer.OrdinalIgnoreCase)
@@ -117,7 +117,7 @@ public class UpdateService : IUpdateService
         }
     }
 
-    private async Task<(bool IsValid, string ErrorMessage)> ValidateReleaseAuthorAsync(GitHubRelease release, string repository)
+    public async Task<(bool IsValid, string ErrorMessage)> ValidateReleaseAuthorAsync(GitHubRelease release, string repository)
     {
         if (release.Author == null)
         {
@@ -435,13 +435,17 @@ public class UpdateService : IUpdateService
             if (!isValid)
             {
                 _logger.Warn("Update check blocked due to security validation failure: {ErrorMessage}", errorMessage);
-                return false;
+                throw new SecurityException(errorMessage, latestRelease.Author?.Login ?? "unknown", latestRelease.TagName, repository);
             }
 
             var result = IsVersionGreater(latestRelease.TagName, currentVersion);
             _logger.Debug("`IsVersionGreater` returned {Result} for latest release {TagName}", result, latestRelease.TagName);
 
             return result;
+        }
+        catch (SecurityException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
