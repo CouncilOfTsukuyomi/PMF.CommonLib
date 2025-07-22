@@ -1,4 +1,4 @@
-﻿
+﻿using System.Runtime.InteropServices;
 using CommonLib.Interfaces;
 using CommonLib.Models;
 using NLog;
@@ -28,6 +28,10 @@ public class DownloadUpdater : IDownloadUpdater
             progress?.Report(new DownloadProgress { Status = "Initializing updater download...", PercentComplete = 0 });
             
             await _aria2Service.EnsureAria2AvailableAsync(ct).ConfigureAwait(false);
+
+            var downloadFolder = Path.Combine(Path.GetTempPath(), "Council Of Tsukuyomi");
+            progress?.Report(new DownloadProgress { Status = "Cleaning up old updater files...", PercentComplete = 5 });
+            CleanupOldUpdaterFiles(downloadFolder);
 
             progress?.Report(new DownloadProgress { Status = "Getting latest updater release...", PercentComplete = 10 });
 
@@ -63,13 +67,16 @@ public class DownloadUpdater : IDownloadUpdater
                 progress?.Report(new DownloadProgress { Status = "No updater assets found", PercentComplete = 0 });
                 return null;
             }
-                
+
+            var platformSuffix = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "Windows" : "Linux";
             var zipAsset = latestRelease.Assets
-                .FirstOrDefault(a => a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(a => a.Name.Contains($"Updater-{platformSuffix}", StringComparison.OrdinalIgnoreCase) && 
+                                   a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+
             if (zipAsset == null)
             {
-                _logger.Warn("No .zip asset found in the release. Aborting updater download.");
-                progress?.Report(new DownloadProgress { Status = "No updater zip found", PercentComplete = 0 });
+                _logger.Warn("No {Platform} updater zip asset found in the release. Aborting updater download.", platformSuffix);
+                progress?.Report(new DownloadProgress { Status = $"No {platformSuffix} updater zip found", PercentComplete = 0 });
                 return null;
             }
 
@@ -77,7 +84,6 @@ public class DownloadUpdater : IDownloadUpdater
 
             progress?.Report(new DownloadProgress { Status = "Preparing trusted updater download...", PercentComplete = 20 });
 
-            var downloadFolder = Path.Combine(Path.GetTempPath(), "Council Of Tsukuyomi");
             if (!Directory.Exists(downloadFolder))
             {
                 Directory.CreateDirectory(downloadFolder);
@@ -145,17 +151,19 @@ public class DownloadUpdater : IDownloadUpdater
                 }
             }
 
-            var updaterPath = Path.Combine(downloadFolder, "Updater.exe");
+            var updaterExecutableName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "Updater.exe" : "Updater";
+            var updaterPath = Path.Combine(downloadFolder, updaterExecutableName);
+            
             if (File.Exists(updaterPath))
             {
-                _logger.Debug("Updater.exe found at `{UpdaterPath}`. Returning path.", updaterPath);
+                _logger.Debug("{UpdaterExecutable} found at `{UpdaterPath}`. Returning path.", updaterExecutableName, updaterPath);
                 progress?.Report(new DownloadProgress { Status = "Trusted updater ready", PercentComplete = 100 });
                 
                 _logger.Info("=== TRUSTED UPDATER DOWNLOAD COMPLETED SUCCESSFULLY ===");
                 return updaterPath;
             }
 
-            _logger.Warn("Updater.exe not found in `{DownloadFolder}` after extraction.", downloadFolder);
+            _logger.Warn("{UpdaterExecutable} not found in `{DownloadFolder}` after extraction.", updaterExecutableName, downloadFolder);
             progress?.Report(new DownloadProgress { Status = "Updater executable not found", PercentComplete = 0 });
             return null;
         }
@@ -170,6 +178,70 @@ public class DownloadUpdater : IDownloadUpdater
             _logger.Error(ex, "An error occurred while downloading the updater");
             progress?.Report(new DownloadProgress { Status = "Error occurred", PercentComplete = 0 });
             return null;
+        }
+    }
+
+    private void CleanupOldUpdaterFiles(string downloadFolder)
+    {
+        try
+        {
+            if (Directory.Exists(downloadFolder))
+            {
+                _logger.Info("Cleaning up old updater files from {DownloadFolder}", downloadFolder);
+                
+                var files = Directory.GetFiles(downloadFolder, "*", SearchOption.AllDirectories);
+                var deletedCount = 0;
+                
+                foreach (var file in files)
+                {
+                    try
+                    {
+                        File.Delete(file);
+                        deletedCount++;
+                        _logger.Debug("Deleted old updater file: {File}", file);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Warn(ex, "Failed to delete old updater file: {File}", file);
+                    }
+                }
+                
+                try
+                {
+                    var directories = Directory.GetDirectories(downloadFolder, "*", SearchOption.AllDirectories)
+                        .OrderByDescending(d => d.Length);
+                        
+                    foreach (var directory in directories)
+                    {
+                        try
+                        {
+                            if (!Directory.EnumerateFileSystemEntries(directory).Any())
+                            {
+                                Directory.Delete(directory);
+                                _logger.Debug("Deleted empty updater directory: {Directory}", directory);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.Debug(ex, "Could not delete directory: {Directory}", directory);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Debug(ex, "Error while cleaning up directories");
+                }
+                
+                _logger.Info("Cleanup completed. Deleted {Count} old updater files", deletedCount);
+            }
+            else
+            {
+                _logger.Debug("Download folder does not exist, no cleanup needed: {DownloadFolder}", downloadFolder);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn(ex, "Error occurred during updater cleanup, continuing with download...");
         }
     }
     
