@@ -128,7 +128,10 @@ public class PenumbraService : IPenumbraService
         }
 
         destinationFolderName = RemoveInvalidPathChars(destinationFolderName);
+        _logger.Debug("Cleaned destination folder name: '{FolderName}' (Length: {Length})", 
+            destinationFolderName, destinationFolderName.Length);
         var destinationFolderPath = Path.Combine(penumbraPath, destinationFolderName);
+
         
         if (!_fileStorage.Exists(destinationFolderPath))
         {
@@ -316,8 +319,23 @@ public class PenumbraService : IPenumbraService
 
     private static string RemoveInvalidPathChars(string text)
     {
+        if (string.IsNullOrWhiteSpace(text))
+            return "DefaultModName";
+        
         var invalidChars = Path.GetInvalidFileNameChars();
-        return new string(text.Where(ch => !invalidChars.Contains(ch)).ToArray());
+        var cleaned = new string(text.Where(ch => !invalidChars.Contains(ch)).ToArray());
+        
+        cleaned = cleaned.Trim();
+        
+        while (cleaned.Contains("  "))
+        {
+            cleaned = cleaned.Replace("  ", " ");
+        }
+        
+        if (string.IsNullOrWhiteSpace(cleaned))
+            return "DefaultModName";
+        
+        return cleaned;
     }
     
     private void ClearDirectory(string directoryPath)
