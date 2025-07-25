@@ -213,7 +213,7 @@ public class ModInstallService : IModInstallService
 
             if (process.ExitCode != 0)
             {
-                _logger.Error("Conversion process for file '{Path}' exited with code {ExitCode}. Standard output: {Output}, Error output: {ErrorOutput}", originalPath, process.ExitCode, standardOutput, errorOutput);
+                _logger.Warn("Conversion process for file '{Path}' exited with code {ExitCode}. Standard output: {Output}, Error output: {ErrorOutput}", originalPath, process.ExitCode, standardOutput, errorOutput);
             }
         }
         catch (Exception ex)
