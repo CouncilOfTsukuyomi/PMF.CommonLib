@@ -36,6 +36,11 @@ public class ConfigurationService : IConfigurationService, IDisposable
     private readonly int _batchSize;
     private readonly int _batchTimeoutMs;
     
+    private readonly int _maxHistoryRecords;
+    private readonly TimeSpan _historyRetentionPeriod;
+    private readonly int _cleanupBatchCounter;
+    private int _currentBatchCount = 0;
+    
     private volatile bool _databaseInitialized = false;
     private static volatile bool _migrationCompleted = false;
     private readonly object _initLock = new object();
@@ -58,6 +63,9 @@ public class ConfigurationService : IConfigurationService, IDisposable
             _batchSize = 1;
             _batchTimeoutMs = 0;
             _cacheExpiry = TimeSpan.FromSeconds(1);
+            _maxHistoryRecords = 50;
+            _historyRetentionPeriod = TimeSpan.FromDays(7);
+            _cleanupBatchCounter = 5;
             _logger.Info("Test environment detected - configured for immediate processing");
         }
         else
@@ -65,6 +73,9 @@ public class ConfigurationService : IConfigurationService, IDisposable
             _batchSize = 10;
             _batchTimeoutMs = 50;
             _cacheExpiry = TimeSpan.FromMinutes(2);
+            _maxHistoryRecords = 1000;
+            _historyRetentionPeriod = TimeSpan.FromDays(30);
+            _cleanupBatchCounter = 20;
         }
         
         if (!string.IsNullOrEmpty(databasePath))
@@ -78,6 +89,8 @@ public class ConfigurationService : IConfigurationService, IDisposable
         }
 
         _logger.Info("ConfigurationService initializing with database path: {DatabasePath}", _databasePath);
+        _logger.Info("History cleanup settings - Max records: {MaxRecords}, Retention: {Retention} days, Cleanup frequency: every {Frequency} batches", 
+            _maxHistoryRecords, _historyRetentionPeriod.TotalDays, _cleanupBatchCounter);
 
         var options = new BoundedChannelOptions(500)
         {
@@ -439,6 +452,14 @@ public class ConfigurationService : IConfigurationService, IDisposable
                 
                     await ProcessConfigurationBatchAsync(operations);
                     operations.Clear();
+                    
+                    _currentBatchCount++;
+                    if (_currentBatchCount >= _cleanupBatchCounter)
+                    {
+                        _logger.Debug("Batch counter reached {Count}, scheduling history cleanup", _cleanupBatchCounter);
+                        _ = Task.Run(CleanupHistoryAsync);
+                        _currentBatchCount = 0;
+                    }
                 }
                 else
                 {
@@ -570,6 +591,78 @@ public class ConfigurationService : IConfigurationService, IDisposable
                 _logger.Error(ex, "Failed to process configuration batch operations");
             }
         });
+    }
+
+    private async Task CleanupHistoryAsync()
+    {
+        try
+        {
+            await Task.Run(() =>
+            {
+                var connectionString = $"Filename={_databasePath};Connection=Shared;Timeout=00:00:10";
+                using var database = new LiteDatabase(connectionString);
+                
+                var configHistory = database.GetCollection<ConfigurationHistoryRecord>("configuration_history");
+                
+                var totalRecords = configHistory.Count();
+                
+                if (totalRecords <= _maxHistoryRecords)
+                {
+                    _logger.Debug("History cleanup skipped - current records ({Count}) below limit ({Limit})", 
+                        totalRecords, _maxHistoryRecords);
+                    return;
+                }
+                
+                _logger.Info("Starting history cleanup - current records: {Count}, limit: {Limit}", 
+                    totalRecords, _maxHistoryRecords);
+                
+                var cutoffDate = DateTime.UtcNow.Subtract(_historyRetentionPeriod);
+                var cutoffTicks = cutoffDate.Ticks;
+                
+                var expiredRecords = configHistory.Find(x => x.ModifiedDateTicks < cutoffTicks);
+                var expiredCount = 0;
+                
+                foreach (var record in expiredRecords)
+                {
+                    configHistory.Delete(record.Id);
+                    expiredCount++;
+                }
+                
+                _logger.Info("Removed {Count} expired history records (older than {Date})", 
+                    expiredCount, cutoffDate.ToString("yyyy-MM-dd"));
+                
+                var remainingRecords = configHistory.Count();
+                if (remainingRecords > _maxHistoryRecords)
+                {
+                    var excessCount = remainingRecords - _maxHistoryRecords;
+                    
+                    var oldestRecords = configHistory.Find(Query.All("ModifiedDateTicks", Query.Ascending), 0, excessCount);
+                    
+                    var removedCount = 0;
+                    foreach (var record in oldestRecords)
+                    {
+                        configHistory.Delete(record.Id);
+                        removedCount++;
+                    }
+                    
+                    _logger.Info("Removed {Count} oldest history records to maintain limit of {Limit}", 
+                        removedCount, _maxHistoryRecords);
+                }
+                
+                var finalCount = configHistory.Count();
+                var totalRemoved = totalRecords - finalCount;
+                
+                _logger.Info("History cleanup completed - removed {Removed} records, {Remaining} remaining", 
+                    totalRemoved, finalCount);
+                
+                database.Rebuild();
+                _logger.Debug("Database rebuilt to reclaim space after history cleanup");
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Failed to cleanup configuration history");
+        }
     }
 
     public void Dispose()
