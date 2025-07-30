@@ -2,7 +2,6 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using AutoMapper;
-using CommonLib.Consts;
 using CommonLib.Enums;
 using CommonLib.Events;
 using CommonLib.Helper;
@@ -80,15 +79,7 @@ public class ConfigurationService : IConfigurationService, IDisposable
             _cleanupBatchCounter = 20;
         }
         
-        if (!string.IsNullOrEmpty(databasePath))
-        {
-            _databasePath = databasePath;
-        }
-        else
-        {
-            var configDir = Path.GetDirectoryName(ConfigurationConsts.ConfigurationFilePath);
-            _databasePath = Path.Combine(configDir, "configuration.db");
-        }
+        _databasePath = GetDatabasePath(databasePath);
 
         _logger.Info("ConfigurationService initializing with database path: {DatabasePath}", _databasePath);
         _logger.Info("History cleanup settings - Max records: {MaxRecords}, Retention: {Retention} days, Cleanup frequency: every {Frequency} batches", 
@@ -123,6 +114,32 @@ public class ConfigurationService : IConfigurationService, IDisposable
         
         _backgroundProcessor = Task.Run(ProcessOperationsAsync, _cancellationTokenSource.Token);
         _logger.Info("ConfigurationService background processor started");
+    }
+
+    private string GetDatabasePath(string? providedPath)
+    {
+        if (!string.IsNullOrEmpty(providedPath))
+        {
+            return providedPath;
+        }
+
+        #if DEBUG
+        var debugPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), 
+                                      "Atomos", "Debug", "configuration.db");
+        
+        var debugDir = Path.GetDirectoryName(debugPath);
+        if (!Directory.Exists(debugDir))
+        {
+            Directory.CreateDirectory(debugDir);
+            _logger.Info("Created debug directory: {DebugDir}", debugDir);
+        }
+        
+        _logger.Info("Debug mode detected - using debug database path");
+        return debugPath;
+        #else
+        var configDir = Path.GetDirectoryName(ConfigurationConsts.ConfigurationFilePath);
+        return Path.Combine(configDir, "configuration.db");
+        #endif
     }
 
     private async Task InitializeDatabaseAsync()
@@ -252,18 +269,56 @@ public class ConfigurationService : IConfigurationService, IDisposable
                 using var database = new LiteDatabase(connectionString);
                 
                 var configurations = database.GetCollection<ConfigurationRecord>("configurations");
-                var allRecords = configurations.FindAll().ToList();
+                
+                var allRecords = new List<ConfigurationRecord>();
+                
+                try
+                {
+                    foreach (var record in configurations.FindAll())
+                    {
+                        try
+                        {
+                            var safeRecord = new ConfigurationRecord
+                            {
+                                Key = ConvertValueSafely(record.Key)?.ToString() ?? string.Empty,
+                                Value = ConvertValueSafely(record.Value),
+                                ValueType = ConvertValueSafely(record.ValueType)?.ToString() ?? "System.String",
+                                LastModified = record.LastModified
+                            };
+                            allRecords.Add(safeRecord);
+                        }
+                        catch (Exception recordEx)
+                        {
+                            _logger.Warn(recordEx, "Failed to process configuration record with key: {Key}, skipping", 
+                                record.Key?.ToString() ?? "unknown");
+                            continue;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Error(ex, "Failed to retrieve configuration records from database, returning default");
+                    return new ConfigurationModel();
+                }
                 
                 ConfigurationModel config;
                 if (allRecords.Any())
                 {
-                    var flatConfig = allRecords.ToDictionary(
-                        r => r.Key, 
-                        r => (r.Value, r.ValueType)
-                    );
-                    
-                    config = ConfigurationFlattener.UnflattenConfiguration(flatConfig);
-                    _logger.Debug("Retrieved and reconstructed configuration from {Count} database records", allRecords.Count);
+                    try
+                    {
+                        var flatConfig = allRecords.ToDictionary(
+                            r => r.Key, 
+                            r => (r.Value, r.ValueType)
+                        );
+                        
+                        config = ConfigurationFlattener.UnflattenConfiguration(flatConfig);
+                        _logger.Debug("Retrieved and reconstructed configuration from {Count} database records", allRecords.Count);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Error(ex, "Failed to reconstruct configuration from database records, using default");
+                        config = new ConfigurationModel();
+                    }
                 }
                 else
                 {
@@ -280,6 +335,29 @@ public class ConfigurationService : IConfigurationService, IDisposable
         {
             _logger.Error(ex, "Failed to retrieve configuration, returning default");
             return new ConfigurationModel();
+        }
+    }
+
+    private object ConvertValueSafely(object value)
+    {
+        if (value == null) return string.Empty;
+        
+        try
+        {
+            if (value is Guid guid)
+            {
+                _logger.Debug("Converting GUID value to string: {Guid}", guid);
+                return guid.ToString();
+            }
+            
+            var stringValue = value.ToString();
+            return stringValue ?? string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn(ex, "Failed to convert value safely, using empty string. Value type: {ValueType}", 
+                value?.GetType()?.Name ?? "null");
+            return string.Empty;
         }
     }
 
