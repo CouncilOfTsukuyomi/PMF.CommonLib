@@ -14,4 +14,7 @@ public interface IConfigurationService
     void SaveConfiguration(ConfigurationModel updatedConfig, bool detectChangesAndInvokeEvents = true);
     void UpdateConfigFromExternal(string propertyPath, object newValue);
     Task<string> ExportToFileAsync(string? filePath = null);
+    Task FlushPendingChangesAsync();
+    void FlushPendingChangesSync();
+    int GetPendingOperationCount();
 }

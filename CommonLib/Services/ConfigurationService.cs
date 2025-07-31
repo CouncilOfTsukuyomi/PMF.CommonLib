@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using AutoMapper;
+using CommonLib.Consts;
 using CommonLib.Enums;
 using CommonLib.Events;
 using CommonLib.Helper;
@@ -47,6 +48,8 @@ public class ConfigurationService : IConfigurationService, IDisposable
     private readonly object _initLock = new object();
     
     private bool _disposed = false;
+
+    private readonly ConcurrentQueue<ConfigurationOperation> _operationQueue = new();
 
     public event EventHandler<ConfigurationChangedEventArgs>? ConfigurationChanged;
 
@@ -377,9 +380,28 @@ public class ConfigurationService : IConfigurationService, IDisposable
 
         QueueConfigurationOperationFireAndForget(operation);
     }
-
+    
     public void CreateConfiguration()
     {
+        try
+        {
+            var connectionString = $"Filename={_databasePath};Connection=Shared;Timeout=00:00:05";
+            using var database = new LiteDatabase(connectionString);
+            var configurations = database.GetCollection<ConfigurationRecord>("configurations");
+            
+            if (configurations.Count() > 0)
+            {
+                _logger.Info("Configuration already exists, skipping creation");
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn(ex, "Failed to check existing configuration, proceeding with creation");
+        }
+
+        _logger.Info("No existing configuration found, creating default configuration");
+    
         var operation = new ConfigurationOperation
         {
             Type = OperationType.CreateConfiguration,
@@ -456,11 +478,80 @@ public class ConfigurationService : IConfigurationService, IDisposable
         QueueConfigurationOperationFireAndForget(operation);
     }
 
+    public async Task FlushPendingChangesAsync()
+    {
+        _logger.Info("Flushing pending configuration changes... Current queue size: {QueueSize}", _operationQueue.Count);
+        
+        if (_operationQueue.IsEmpty)
+        {
+            _logger.Info("No pending configuration changes to flush");
+            return;
+        }
+        
+        var timeout = TimeSpan.FromSeconds(15);
+        var startTime = DateTime.UtcNow;
+        var initialCount = _operationQueue.Count;
+        
+        while (!_operationQueue.IsEmpty && DateTime.UtcNow - startTime < timeout)
+        {
+            await Task.Delay(100);
+            
+            if ((DateTime.UtcNow - startTime).TotalSeconds % 2 < 0.1)
+            {
+                _logger.Debug("Still flushing... {Remaining} operations remaining", _operationQueue.Count);
+            }
+        }
+        
+        var finalCount = _operationQueue.Count;
+        var processedCount = initialCount - finalCount;
+        
+        if (finalCount > 0)
+        {
+            _logger.Warn("Timeout waiting for configuration operations to complete after {Timeout}s. " +
+                        "Processed: {Processed}, Remaining: {Remaining}", 
+                        timeout.TotalSeconds, processedCount, finalCount);
+        }
+        else
+        {
+            _logger.Info("All {Count} pending configuration changes flushed successfully in {Duration:F1}s", 
+                        processedCount, (DateTime.UtcNow - startTime).TotalSeconds);
+        }
+    }
+
+    public void FlushPendingChangesSync()
+    {
+        try
+        {
+            var task = FlushPendingChangesAsync();
+            task.Wait(TimeSpan.FromSeconds(15));
+            
+            if (!task.IsCompletedSuccessfully)
+            {
+                _logger.Warn("Synchronous flush did not complete successfully. Task status: {Status}", task.Status);
+            }
+        }
+        catch (AggregateException ex)
+        {
+            _logger.Error(ex.Flatten(), "Error during synchronous configuration flush");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Error during synchronous configuration flush");
+        }
+    }
+
+    public int GetPendingOperationCount()
+    {
+        return _operationQueue.Count;
+    }
+
     private async Task QueueConfigurationOperationAsync(ConfigurationOperation operation)
     {
         try
         {
             _logger.Debug("Attempting to queue configuration operation: {Type}", operation.Type);
+            
+            _operationQueue.Enqueue(operation);
 
             if (!_operationWriter.TryWrite(operation))
             {
@@ -475,6 +566,10 @@ public class ConfigurationService : IConfigurationService, IDisposable
         }
         catch (Exception ex)
         {
+            if (_operationQueue.TryDequeue(out _))
+            {
+                _logger.Debug("Removed failed operation from tracking queue");
+            }
             _logger.Error(ex, "Failed to queue configuration operation: {Type}", operation.Type);
         }
     }
@@ -665,6 +760,14 @@ public class ConfigurationService : IConfigurationService, IDisposable
                     operations.Count, flatConfig.Count);
         
                 _logger.Info("Successfully processed configuration batch of {Count} operations", operations.Count);
+                
+                for (int i = 0; i < operations.Count; i++)
+                {
+                    _operationQueue.TryDequeue(out _);
+                }
+                
+                _logger.Debug("Removed {Count} processed operations from tracking queue. Remaining: {Remaining}", 
+                            operations.Count, _operationQueue.Count);
             }
             catch (Exception ex)
             {
@@ -900,7 +1003,6 @@ public class ConfigurationService : IConfigurationService, IDisposable
         return value.ToString() ?? "null";
     }
 
-
     private bool AreValuesEqual(object value1, object value2)
     {
         if (value1 == null && value2 == null) return true;
@@ -953,13 +1055,21 @@ public class ConfigurationService : IConfigurationService, IDisposable
                value is float || value is double || value is decimal;
     }
 
-
     public void Dispose()
     {
         if (_disposed) return;
         
-        _logger.Info("ConfigurationService disposal starting");
+        _logger.Info("ConfigurationService disposal starting - flushing pending changes");
         _disposed = true;
+        
+        try
+        {
+            FlushPendingChangesSync();
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Error flushing pending changes during disposal");
+        }
         
         _operationWriter.Complete();
         _cancellationTokenSource.Cancel();
