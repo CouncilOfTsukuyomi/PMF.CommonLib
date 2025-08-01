@@ -50,13 +50,27 @@ public class PenumbraService : IPenumbraService
             c => c.BackgroundWorker.PenumbraModFolderPath
         ) as string;
 
+        var foundPath = FindPenumbraPath();
+        
         if (!string.IsNullOrWhiteSpace(existingPath))
         {
-            _logger.Info("Penumbra path is already set in the configuration.");
+            if (string.IsNullOrWhiteSpace(foundPath))
+            {
+                _logger.Warn("Penumbra path was previously set to {ExistingPath}, but could not be located with any known configuration.", existingPath);
+                return;
+            }
+
+            if (existingPath.Equals(foundPath, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.Info("Penumbra path is already set and matches current configuration: {ExistingPath}", existingPath);
+                return;
+            }
+
+            _logger.Info("Penumbra path has changed from {ExistingPath} to {NewPath}. Updating configuration.", existingPath, foundPath);
+            UpdatePenumbraPathInConfiguration(foundPath);
             return;
         }
-
-        var foundPath = FindPenumbraPath();
+        
         if (!string.IsNullOrWhiteSpace(foundPath))
         {
             UpdatePenumbraPathInConfiguration(foundPath);
