@@ -39,7 +39,7 @@ public class UpdateService : IUpdateService
         _httpClient = new HttpClient();
         _httpClient.DefaultRequestHeaders.UserAgent.Add(
             new ProductInfoHeaderValue("CouncilOfTsukuyomi", "1.0"));
-        _httpClient.Timeout = TimeSpan.FromSeconds(30);
+        _httpClient.Timeout = TimeSpan.FromMinutes(2);
     }
 
     public class GitHubRelease
