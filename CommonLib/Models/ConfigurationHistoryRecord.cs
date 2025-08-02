@@ -4,7 +4,7 @@ namespace CommonLib.Models;
 
 public class ConfigurationHistoryRecord
 {
-    [BsonId, BsonField("_id")]
+    [BsonId]
     public ObjectId Id { get; set; }
     
     public string Key { get; set; } = string.Empty;
@@ -24,4 +24,5 @@ public class ConfigurationHistoryRecord
     }
     
     public string ChangeDescription { get; set; } = string.Empty;
+    public string? SourceId { get; set; }
 }

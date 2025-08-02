@@ -9,4 +9,6 @@ internal class ConfigurationOperation
     public bool DetectChanges { get; set; } = true;
     public string ChangeDescription { get; set; }
     public DateTime Timestamp { get; set; }
+    public string? SourceId { get; set; }
+    public bool SuppressEvents { get; set; }
 }

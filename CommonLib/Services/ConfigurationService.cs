@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using AutoMapper;
@@ -35,13 +36,10 @@ public class ConfigurationService : IConfigurationService, IDisposable
     private readonly ConcurrentDictionary<string, (ConfigurationModel config, DateTime lastUpdated)> _configCache = new();
     private readonly TimeSpan _cacheExpiry;
     
-    private readonly int _batchSize;
-    private readonly int _batchTimeoutMs;
-    
     private readonly int _maxHistoryRecords;
     private readonly TimeSpan _historyRetentionPeriod;
-    private readonly int _cleanupBatchCounter;
-    private int _currentBatchCount = 0;
+    private readonly int _cleanupOperationCounter;
+    private int _currentOperationCount = 0;
     
     private volatile bool _databaseInitialized = false;
     private static volatile bool _migrationCompleted = false;
@@ -64,29 +62,25 @@ public class ConfigurationService : IConfigurationService, IDisposable
         
         if (isTestEnvironment)
         {
-            _batchSize = 1;
-            _batchTimeoutMs = 0;
             _cacheExpiry = TimeSpan.FromSeconds(1);
             _maxHistoryRecords = 50;
             _historyRetentionPeriod = TimeSpan.FromDays(7);
-            _cleanupBatchCounter = 5;
+            _cleanupOperationCounter = 5;
             _logger.Info("Test environment detected - configured for immediate processing");
         }
         else
         {
-            _batchSize = 10;
-            _batchTimeoutMs = 50;
             _cacheExpiry = TimeSpan.FromMinutes(2);
             _maxHistoryRecords = 1000;
             _historyRetentionPeriod = TimeSpan.FromDays(30);
-            _cleanupBatchCounter = 20;
+            _cleanupOperationCounter = 20;
         }
         
         _databasePath = GetDatabasePath(databasePath);
 
         _logger.Info("ConfigurationService initializing with database path: {DatabasePath}", _databasePath);
-        _logger.Info("History cleanup settings - Max records: {MaxRecords}, Retention: {Retention} days, Cleanup frequency: every {Frequency} batches", 
-            _maxHistoryRecords, _historyRetentionPeriod.TotalDays, _cleanupBatchCounter);
+        _logger.Info("History cleanup settings - Max records: {MaxRecords}, Retention: {Retention} days, Cleanup frequency: every {Frequency} operations", 
+            _maxHistoryRecords, _historyRetentionPeriod.TotalDays, _cleanupOperationCounter);
 
         var options = new BoundedChannelOptions(500)
         {
@@ -252,7 +246,21 @@ public class ConfigurationService : IConfigurationService, IDisposable
         if (_configCache.TryGetValue(cacheKey, out var cached) && 
             DateTime.UtcNow - cached.lastUpdated < _cacheExpiry)
         {
-            _logger.Debug("Retrieved configuration from cache");
+            _logger.Debug("Retrieved configuration from cache (age: {Age:F1}s)", 
+                (DateTime.UtcNow - cached.lastUpdated).TotalSeconds);
+            
+            // Add debug info about the cached configuration
+            try
+            {
+                var downloadPath = GetPropertyValue(cached.config, "BackgroundWorker.DownloadPath");
+                _logger.Debug("Cache contains - BackgroundWorker.DownloadPath: '{Value}' (Type: {Type})", 
+                    downloadPath, downloadPath?.GetType().Name);
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug(ex, "Failed to read BackgroundWorker.DownloadPath from cached config");
+            }
+            
             return cached.config;
         }
 
@@ -330,6 +338,19 @@ public class ConfigurationService : IConfigurationService, IDisposable
                 }
                 
                 _configCache[cacheKey] = (config, DateTime.UtcNow);
+                
+                // Add debug info about the loaded configuration
+                try
+                {
+                    var downloadPath = GetPropertyValue(config, "BackgroundWorker.DownloadPath");
+                    _logger.Debug("Loaded from DB - BackgroundWorker.DownloadPath: '{Value}' (Type: {Type})", 
+                        downloadPath, downloadPath?.GetType().Name);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Debug(ex, "Failed to read BackgroundWorker.DownloadPath from loaded config");
+                }
+                
                 return config;
                 
             }).ConfigureAwait(false).GetAwaiter().GetResult();
@@ -375,7 +396,9 @@ public class ConfigurationService : IConfigurationService, IDisposable
             Configuration = updatedConfig,
             DetectChanges = detectChangesAndInvokeEvents,
             ChangeDescription = detectChangesAndInvokeEvents ? "Configuration updated" : "Configuration saved without change detection",
-            Timestamp = DateTime.UtcNow
+            Timestamp = DateTime.UtcNow,
+            SourceId = "local",
+            SuppressEvents = false
         };
 
         QueueConfigurationOperationFireAndForget(operation);
@@ -407,7 +430,9 @@ public class ConfigurationService : IConfigurationService, IDisposable
             Type = OperationType.CreateConfiguration,
             Configuration = new ConfigurationModel(),
             ChangeDescription = "Default configuration created",
-            Timestamp = DateTime.UtcNow
+            Timestamp = DateTime.UtcNow,
+            SourceId = "local",
+            SuppressEvents = false
         };
 
         QueueConfigurationOperationFireAndForget(operation);
@@ -420,12 +445,14 @@ public class ConfigurationService : IConfigurationService, IDisposable
             Type = OperationType.ResetConfiguration,
             Configuration = new ConfigurationModel(),
             ChangeDescription = "Configuration reset to defaults",
-            Timestamp = DateTime.UtcNow
+            Timestamp = DateTime.UtcNow,
+            SourceId = "local",
+            SuppressEvents = false
         };
 
         QueueConfigurationOperationFireAndForget(operation);
         
-        ConfigurationChanged?.Invoke(this, new ConfigurationChangedEventArgs("All", new ConfigurationModel()));
+        ConfigurationChanged?.Invoke(this, new ConfigurationChangedEventArgs("All", new ConfigurationModel(), "local"));
     }
 
     public object ReturnConfigValue(Func<ConfigurationModel, object> propertySelector)
@@ -445,7 +472,7 @@ public class ConfigurationService : IConfigurationService, IDisposable
         var config = GetConfiguration();
         propertyUpdater(config);
         
-        ConfigurationChanged?.Invoke(this, new ConfigurationChangedEventArgs(changedPropertyPath, newValue));
+        ConfigurationChanged?.Invoke(this, new ConfigurationChangedEventArgs(changedPropertyPath, newValue, "local"));
         
         var operation = new ConfigurationOperation
         {
@@ -453,29 +480,85 @@ public class ConfigurationService : IConfigurationService, IDisposable
             Configuration = config,
             DetectChanges = false,
             ChangeDescription = $"Updated {changedPropertyPath}",
-            Timestamp = DateTime.UtcNow
+            Timestamp = DateTime.UtcNow,
+            SourceId = "local",
+            SuppressEvents = false
         };
 
         QueueConfigurationOperationFireAndForget(operation);
     }
 
-    public void UpdateConfigFromExternal(string propertyPath, object newValue)
+    public void UpdateConfigFromExternal(string propertyPath, object newValue, string? sourceId = null)
     {
+        _logger.Debug("UpdateConfigFromExternal called - PropertyPath: '{PropertyPath}', ValueType: '{ValueType}', SourceId: '{SourceId}'", 
+            propertyPath, newValue?.GetType().Name, sourceId ?? "external");
+
         var config = GetConfiguration();
+        
+        var originalValue = GetPropertyValue(config, propertyPath);
+        _logger.Debug("Original value before update: '{OriginalValue}' (Type: {OriginalType})", 
+            originalValue, originalValue?.GetType().Name);
+        
         PropertyUpdater.SetPropertyValue(config, propertyPath, newValue);
         
-        ConfigurationChanged?.Invoke(this, new ConfigurationChangedEventArgs(propertyPath, newValue));
+        var updatedValue = GetPropertyValue(config, propertyPath);
+        _logger.Debug("Value after PropertyUpdater.SetPropertyValue: '{UpdatedValue}' (Type: {UpdatedType})", 
+            updatedValue, updatedValue?.GetType().Name);
+        
+        // Immediately update the cache with the modified configuration
+        const string cacheKey = "main_config";
+        _configCache[cacheKey] = (config, DateTime.UtcNow);
+        _logger.Debug("Updated configuration cache immediately with modified config. Cache now contains {Count} items", 
+            _configCache.Count);
+        
+        // Verify the cache update worked
+        if (_configCache.TryGetValue(cacheKey, out var cachedConfig))
+        {
+            var verifyValue = GetPropertyValue(cachedConfig.config, propertyPath);
+            _logger.Debug("Cache verification - PropertyPath: '{PropertyPath}', CachedValue: '{CachedValue}' (Type: {CachedType})", 
+                propertyPath, verifyValue, verifyValue?.GetType().Name);
+        }
         
         var operation = new ConfigurationOperation
         {
             Type = OperationType.SaveConfiguration,
             Configuration = config,
-            DetectChanges = false,
+            DetectChanges = true,
             ChangeDescription = $"External update to {propertyPath}",
-            Timestamp = DateTime.UtcNow
+            Timestamp = DateTime.UtcNow,
+            SourceId = sourceId ?? "external",
+            SuppressEvents = false
         };
 
+        _logger.Debug("Queueing configuration operation with DetectChanges=true and SuppressEvents=false");
         QueueConfigurationOperationFireAndForget(operation);
+    }
+
+    private object GetPropertyValue(object obj, string propertyPath)
+    {
+        try
+        {
+            var properties = propertyPath.Split('.');
+            object currentObject = obj;
+
+            foreach (var propertyName in properties)
+            {
+                var propertyInfo = currentObject.GetType().GetProperty(propertyName);
+                if (propertyInfo == null)
+                    return null;
+                
+                currentObject = propertyInfo.GetValue(currentObject);
+                if (currentObject == null)
+                    return null;
+            }
+
+            return currentObject;
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug(ex, "Failed to get property value for path: {PropertyPath}", propertyPath);
+            return null;
+        }
     }
 
     public async Task FlushPendingChangesAsync()
@@ -599,7 +682,6 @@ public class ConfigurationService : IConfigurationService, IDisposable
         
         _logger.Info("Database initialized, configuration background processor now active");
         
-        var operations = new List<ConfigurationOperation>();
         var reader = _operationChannel.Reader;
         
         try
@@ -611,45 +693,19 @@ public class ConfigurationService : IConfigurationService, IDisposable
             
                 while (reader.TryRead(out var operation))
                 {
-                    _logger.Debug("Received configuration operation: {Type} at {Timestamp}", 
-                        operation.Type, operation.Timestamp);
+                    _logger.Debug("Received configuration operation: {Type} at {Timestamp} from source: {SourceId}", 
+                        operation.Type, operation.Timestamp, operation.SourceId ?? "unknown");
                 
-                    operations.Add(operation);
-                }
-            
-                if (operations.Count == 0) continue;
-            
-                var timeSinceFirstOperation = (DateTime.UtcNow - operations[0].Timestamp).TotalMilliseconds;
-            
-                if (operations.Count >= _batchSize || timeSinceFirstOperation >= _batchTimeoutMs)
-                {
-                    _logger.Info("Processing configuration batch of {Count} operations", operations.Count);
-                
-                    await ProcessConfigurationBatchAsync(operations);
-                    operations.Clear();
+                    await ProcessConfigurationOperationAsync(operation);
                     
-                    _currentBatchCount++;
-                    if (_currentBatchCount >= _cleanupBatchCounter)
+                    _currentOperationCount++;
+                    if (_currentOperationCount >= _cleanupOperationCounter)
                     {
-                        _logger.Debug("Batch counter reached {Count}, scheduling history cleanup", _cleanupBatchCounter);
+                        _logger.Debug("Operation counter reached {Count}, scheduling history cleanup", _cleanupOperationCounter);
                         _ = Task.Run(CleanupHistoryAsync);
-                        _currentBatchCount = 0;
+                        _currentOperationCount = 0;
                     }
                 }
-                else
-                {
-                    var remainingTimeout = _batchTimeoutMs - (int)timeSinceFirstOperation;
-                    if (remainingTimeout > 0)
-                    {
-                        await Task.Delay(remainingTimeout, _cancellationTokenSource.Token);
-                    }
-                }
-            }
-        
-            if (operations.Count > 0)
-            {
-                _logger.Info("Processing final configuration batch of {Count} operations on shutdown", operations.Count);
-                await ProcessConfigurationBatchAsync(operations);
             }
         }
         catch (OperationCanceledException)
@@ -666,112 +722,124 @@ public class ConfigurationService : IConfigurationService, IDisposable
         }
     }
 
-    private async Task ProcessConfigurationBatchAsync(List<ConfigurationOperation> operations)
+    private async Task ProcessConfigurationOperationAsync(ConfigurationOperation operation)
     {
-        if (operations.Count == 0) return;
-
         await Task.Run(() =>
         {
             try
             {
+                _logger.Debug("Processing configuration operation: {Type} from source: {SourceId}", 
+                    operation.Type, operation.SourceId ?? "unknown");
+
                 var connectionString = $"Filename={_databasePath};Connection=Shared;Timeout=00:00:10";
                 using var database = new LiteDatabase(connectionString);
                 
                 var configurations = database.GetCollection<ConfigurationRecord>("configurations");
                 var configHistory = database.GetCollection<ConfigurationHistoryRecord>("configuration_history");
         
-                var latestOperation = operations.OrderByDescending(o => o.Timestamp).First();
-        
                 ConfigurationModel originalConfig = null;
         
-                if (latestOperation.DetectChanges)
+                if (operation.DetectChanges)
                 {
                     var currentRecords = configurations.FindAll().ToList();
                     if (currentRecords.Any())
                     {
                         var currentFlat = currentRecords.ToDictionary(r => r.Key, r => (r.Value, r.ValueType));
                         originalConfig = ConfigurationFlattener.UnflattenConfiguration(currentFlat);
+                        _logger.Debug("Loaded original config for change detection with {Count} records", currentRecords.Count);
+                    }
+                    else
+                    {
+                        _logger.Debug("No existing configuration found for change detection");
                     }
                 }
         
-                var flatConfig = ConfigurationFlattener.FlattenConfiguration(latestOperation.Configuration);
+                var flatConfig = ConfigurationFlattener.FlattenConfiguration(operation.Configuration);
+                _logger.Debug("Flattened configuration to {Count} key-value pairs", flatConfig.Count);
                 
                 var existingRecords = configurations.FindAll().ToDictionary(r => r.Key, r => r);
                 var keysToRemove = existingRecords.Keys.Except(flatConfig.Keys).ToList();
                 
-                foreach (var keyToRemove in keysToRemove)
+                if (keysToRemove.Any())
                 {
-                    configurations.Delete(keyToRemove);
+                    _logger.Debug("Removing {Count} obsolete configuration keys", keysToRemove.Count);
+                    foreach (var keyToRemove in keysToRemove)
+                    {
+                        configurations.Delete(keyToRemove);
+                    }
                 }
                 
+                var updatedCount = 0;
                 foreach (var kvp in flatConfig)
                 {
-                    if (existingRecords.TryGetValue(kvp.Key, out var existingRecord))
+                    var configRecord = new ConfigurationRecord
                     {
-                        existingRecord.Value = kvp.Value.value;
-                        existingRecord.ValueType = kvp.Value.type;
-                        existingRecord.LastModified = latestOperation.Timestamp;
-                        
-                        configurations.Update(existingRecord);
-                    }
-                    else
-                    {
-                        var newRecord = new ConfigurationRecord
-                        {
-                            Key = kvp.Key,
-                            Value = kvp.Value.value,
-                            ValueType = kvp.Value.type,
-                            LastModified = latestOperation.Timestamp
-                        };
-                        
-                        configurations.Insert(newRecord);
-                    }
+                        Key = kvp.Key,
+                        Value = kvp.Value.value,
+                        ValueType = kvp.Value.type,
+                        LastModified = operation.Timestamp
+                    };
+                    
+                    configurations.Upsert(configRecord);
+                    updatedCount++;
                     
                     var historyRecord = new ConfigurationHistoryRecord
                     {
                         Key = kvp.Key,
                         Value = kvp.Value.value,
                         ValueType = kvp.Value.type,
-                        ModifiedDate = latestOperation.Timestamp,
-                        ChangeDescription = latestOperation.ChangeDescription
+                        ModifiedDate = operation.Timestamp,
+                        ChangeDescription = operation.ChangeDescription,
+                        SourceId = operation.SourceId
                     };
-                    
+
                     configHistory.Insert(historyRecord);
                 }
+                
+                _logger.Debug("Updated {Count} configuration records in database", updatedCount);
         
                 _configCache.Clear();
-        
-                foreach (var operation in operations.Where(o => o.DetectChanges))
+                _logger.Debug("Cleared configuration cache");
+                
+                var eventsRaised = 0;
+                if (operation.DetectChanges && !operation.SuppressEvents)
                 {
                     if (originalConfig != null)
                     {
                         var changes = _changeDetector.GetChanges(originalConfig, operation.Configuration);
+                        _logger.Debug("Detected {Count} changes for operation from source {SourceId}", 
+                            changes.Count, operation.SourceId);
+                        
                         foreach (var change in changes)
                         {
+                            _logger.Debug("Raising ConfigurationChanged event for '{PropertyPath}' = '{Value}' from source '{SourceId}'", 
+                                change.Key, change.Value, operation.SourceId);
+                            
                             ConfigurationChanged?.Invoke(
                                 this,
-                                new ConfigurationChangedEventArgs(change.Key, change.Value)
+                                new ConfigurationChangedEventArgs(change.Key, change.Value, operation.SourceId)
                             );
+                            eventsRaised++;
                         }
                     }
-                }
-        
-                _logger.Debug("Processed configuration batch with {Count} operations, applied latest with {SettingCount} settings", 
-                    operations.Count, flatConfig.Count);
-        
-                _logger.Info("Successfully processed configuration batch of {Count} operations", operations.Count);
-                
-                for (int i = 0; i < operations.Count; i++)
-                {
-                    _operationQueue.TryDequeue(out _);
+                    else
+                    {
+                        _logger.Debug("No original config available for change detection");
+                    }
                 }
                 
-                _logger.Debug("Removed {Count} processed operations from tracking queue. Remaining: {Remaining}", 
-                            operations.Count, _operationQueue.Count);
+                _logger.Debug("Raised {Count} configuration change events", eventsRaised);
+        
+                _logger.Info("Successfully processed configuration operation {Type} with {SettingCount} settings from source {SourceId}", 
+                    operation.Type, flatConfig.Count, operation.SourceId ?? "unknown");
+                
+                _operationQueue.TryDequeue(out _);
+                _logger.Debug("Removed processed operation from tracking queue. Remaining: {Remaining}", _operationQueue.Count);
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "Failed to process configuration batch operations");
+                _logger.Error(ex, "Failed to process configuration operation: {Type} from source: {SourceId}", 
+                    operation.Type, operation.SourceId ?? "unknown");
             }
         });
     }

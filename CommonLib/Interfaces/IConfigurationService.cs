@@ -12,7 +12,7 @@ public interface IConfigurationService
     void ResetToDefaultConfiguration();
     ConfigurationModel GetConfiguration();
     void SaveConfiguration(ConfigurationModel updatedConfig, bool detectChangesAndInvokeEvents = true);
-    void UpdateConfigFromExternal(string propertyPath, object newValue);
+    void UpdateConfigFromExternal(string propertyPath, object newValue, string? sourceId = null);
     Task<string> ExportToFileAsync(string? filePath = null);
     Task FlushPendingChangesAsync();
     void FlushPendingChangesSync();
