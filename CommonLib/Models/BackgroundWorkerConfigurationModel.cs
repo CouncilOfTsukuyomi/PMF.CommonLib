@@ -12,7 +12,7 @@ public class BackgroundWorkerConfigurationModel
     [Display(Name = "Install All Mods", GroupName = "General", Description = "Install every mod inside an archive")]
     public bool InstallAll { get; set; }
 
-    [Display(Name = "Mod Folder Path", GroupName = "Pathing", Description = "Where to move the mods to for processing (This should not be the same as your Penumbra Path)")]
+    [Display(Name = "Mod Processing Path", GroupName = "Pathing", Description = "Where to move the mods to for processing (This should not be the same as your Penumbra Path)")]
     public string ModFolderPath { get; set; } = ConfigurationConsts.ModsPath;
 
     [ExcludeFromSettingsUI] private List<string> _downloadPath = [];
