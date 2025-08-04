@@ -61,7 +61,7 @@ public class ModInstallService : IModInstallService
                 if ((bool)_configurationService.ReturnConfigValue(config => config.BackgroundWorker.AutoDelete))
                 {
                     _logger.Info("Deleting mod {Path}", finalPath);
-                    _fileStorage.Delete(finalPath);
+                    _ = await DeleteFileWithRetryAsync(finalPath);
                 }
 
                 _logger.Info("Mod installed successfully from path '{Path}' via PenumbraService", finalPath);
@@ -74,7 +74,6 @@ public class ModInstallService : IModInstallService
             }
         }
 
-        // Fallback for other file types
         var modData = new ModInstallData(finalPath);
         var json = JsonConvert.SerializeObject(modData);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -104,6 +103,52 @@ public class ModInstallService : IModInstallService
         }
     }
 
+    private async Task<bool> DeleteFileWithRetryAsync(string filePath, int maxRetries = 3, int initialDelayMs = 1000)
+    {
+        for (int attempt = 0; attempt < maxRetries; attempt++)
+        {
+            try
+            {
+                _fileStorage.Delete(filePath);
+                _logger.Info("Successfully deleted mod file: {Path}", filePath);
+                return true;
+            }
+            catch (IOException ex) when (ex.Message.Contains("being used by another process"))
+            {
+                if (attempt == maxRetries - 1)
+                {
+                    _logger.Warn("Unable to delete mod file after {MaxRetries} attempts: {Path}. " +
+                                "File may be locked by another process (antivirus, indexer, etc.). " +
+                                "The mod was installed successfully - manual cleanup may be needed.",
+                                maxRetries, filePath);
+                    return false;
+                }
+
+                var delayMs = initialDelayMs * (int)Math.Pow(2, attempt);
+                _logger.Info("File deletion attempt {Attempt} failed due to file lock, retrying in {Delay}ms: {Path}",
+                           attempt + 1, delayMs, filePath);
+                await Task.Delay(delayMs);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.Warn(ex, "Access denied when trying to delete file: {Path}. Manual cleanup may be needed.", filePath);
+                return false;
+            }
+            catch (IOException ex) when (ex is DirectoryNotFoundException || ex is FileNotFoundException)
+            {
+                _logger.Info("File or directory no longer exists, considering deletion successful: {Path}", filePath);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn(ex, "Unexpected error while deleting file: {Path}. Manual cleanup may be needed.", filePath);
+                return false;
+            }
+        }
+        
+        return false;
+    }
+
     private async Task ReloadModAsync(string modFolder, string modName)
     {
         var data = new ModReloadData(modFolder, modName);
@@ -115,7 +160,6 @@ public class ModInstallService : IModInstallService
         var response = await _httpClient.PostAsync("reloadmod", content);
         response.EnsureSuccessStatusCode();
 
-        // Give Penumbra a little time to refresh
         await Task.Delay(200);
         _logger.Info("Successfully reloaded Penumbra mod at '{ModFolder}' with name '{ModName}'", modFolder, modName);
     }
@@ -136,17 +180,14 @@ public class ModInstallService : IModInstallService
 
         if (relocateFiles)
         {
-            // Create 'Converted' folder if relocate is enabled
             var convertedDirectory = Path.Combine(originalDirectory, "Converted");
             Directory.CreateDirectory(convertedDirectory);
 
             var newFileName = Path.GetFileNameWithoutExtension(originalPath) + "_converted" + Path.GetExtension(originalPath);
             convertedFilePath = Path.Combine(convertedDirectory, newFileName);
 
-            // Run the conversion process
             RunConversion(converterPath, originalPath, convertedFilePath);
 
-            // Check if the converted file exists
             if (File.Exists(convertedFilePath))
             {
                 _logger.Info("Converted file successfully created at: {Path}", convertedFilePath);
@@ -156,7 +197,6 @@ public class ModInstallService : IModInstallService
 
             _logger.Warn("No converted file found at: {Path}; using original path.", convertedFilePath);
 
-            // Remove the 'Converted' folder if it's empty
             if (Directory.Exists(convertedDirectory) && !Directory.EnumerateFileSystemEntries(convertedDirectory).Any())
             {
                 _logger.Info("Removing empty 'Converted' directory: {Path}", convertedDirectory);
@@ -166,7 +206,6 @@ public class ModInstallService : IModInstallService
         }
         else
         {
-            // If relocate is disabled, place the file next to the original using "_dt"
             var newFileName = Path.GetFileNameWithoutExtension(originalPath) + "_dt" + Path.GetExtension(originalPath);
             convertedFilePath = Path.Combine(originalDirectory, newFileName);
 
@@ -222,14 +261,13 @@ public class ModInstallService : IModInstallService
         }
     }
 
-    private void CleanupOriginalIfNeeded(string originalPath)
+    private async void CleanupOriginalIfNeeded(string originalPath)
     {
         if ((bool)_configurationService.ReturnConfigValue(config => config.BackgroundWorker.AutoDelete))
         {
             if (File.Exists(originalPath))
             {
-                File.Delete(originalPath);
-                _logger.Info("Deleted original mod file at: {Path}", originalPath);
+                _ = await DeleteFileWithRetryAsync(originalPath);
             }
         }
     }
