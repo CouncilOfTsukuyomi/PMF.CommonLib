@@ -1,4 +1,5 @@
-﻿using System.Net.Http.Headers;
+﻿using System.Net;
+using System.Net.Http.Headers;
 using CommonLib.Extensions;
 using CommonLib.Interfaces;
 using CommonLib.Models;
@@ -219,7 +220,7 @@ public class UpdateService : IUpdateService
             
             if (!response.IsSuccessStatusCode)
             {
-                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                if (response.StatusCode == HttpStatusCode.NotFound)
                 {
                     var error = $"User ID {userId} does not exist on GitHub";
                     _logger.Error("SECURITY: GitHub user verification failed - {Error}", error);
@@ -522,7 +523,7 @@ public class UpdateService : IUpdateService
             if (string.IsNullOrWhiteSpace(currentVersion) || string.IsNullOrWhiteSpace(repository))
             {
                 _logger.Error("Security: Invalid input parameters detected");
-                return new List<VersionInfo>();
+                return [];
             }
 
             var includePrerelease = (bool)_configurationService.ReturnConfigValue(c => c.Common.IncludePrereleases);
@@ -532,7 +533,7 @@ public class UpdateService : IUpdateService
             if (allReleases == null || !allReleases.Any())
             {
                 _logger.Debug("No releases found. Returning empty list.");
-                return new List<VersionInfo>();
+                return [];
             }
 
             _logger.Debug("Found {Count} total releases. Filtering for versions newer than {CurrentVersion}", allReleases.Count, currentVersion);
@@ -563,7 +564,7 @@ public class UpdateService : IUpdateService
                 var versionInfo = new VersionInfo
                 {
                     Version = version,
-                    Changelog = release.Body ?? string.Empty,
+                    Changelog = release.Body,
                     IsPrerelease = release.Prerelease,
                     PublishedAt = release.PublishedAt
                 };
@@ -689,7 +690,7 @@ public class UpdateService : IUpdateService
     private (int major, int minor, int patch) GetVersionSortKey(string version)
     {
         var cleanVersion = version.StartsWith("v", StringComparison.OrdinalIgnoreCase) 
-            ? version.Substring(1) 
+            ? version[1..] 
             : version;
 
         var parts = cleanVersion.Split('.');
@@ -799,10 +800,10 @@ public class UpdateService : IUpdateService
         }
 
         var cleanNewVersion = newVersion.StartsWith("v", StringComparison.OrdinalIgnoreCase) 
-            ? newVersion.Substring(1) 
+            ? newVersion[1..] 
             : newVersion;
         var cleanOldVersion = oldVersion.StartsWith("v", StringComparison.OrdinalIgnoreCase) 
-            ? oldVersion.Substring(1) 
+            ? oldVersion[1..] 
             : oldVersion;
 
         _logger.Debug("Cleaned versions. New: {CleanNewVersion}, Old: {CleanOldVersion}", cleanNewVersion, cleanOldVersion);
