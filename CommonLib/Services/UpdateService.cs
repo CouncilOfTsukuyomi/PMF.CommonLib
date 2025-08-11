@@ -202,18 +202,14 @@ public class UpdateService : IUpdateService
                         _logger.Debug("User validation cache hit - User {Username} (ID: {UserId}) verified from cache", username, userId);
                         return (true, string.Empty);
                     }
-                    else
-                    {
-                        var error = $"User ID {userId} is cached but belongs to '{cached.login}', not '{username}'";
-                        _logger.Error("SECURITY: Cache validation failed - {Error}", error);
-                        return (false, error);
-                    }
+
+                    var error = $"User ID {userId} is cached but belongs to '{cached.login}', not '{username}'";
+                    _logger.Error("SECURITY: Cache validation failed - {Error}", error);
+                    return (false, error);
                 }
-                else
-                {
-                    _userValidationCache.Remove(userId);
-                    _logger.Debug("Removed expired cache entry for user ID {UserId}", userId);
-                }
+
+                _userValidationCache.Remove(userId);
+                _logger.Debug("Removed expired cache entry for user ID {UserId}", userId);
             }
 
             var userApiUrl = $"https://api.github.com/user/{userId}";
