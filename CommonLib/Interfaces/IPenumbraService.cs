@@ -3,5 +3,5 @@
 public interface IPenumbraService
 {
     void InitializePenumbraPath();
-    string InstallMod(string sourceFilePath);
+    (string folderPath, string modName) InstallMod(string sourceFilePath);
 }

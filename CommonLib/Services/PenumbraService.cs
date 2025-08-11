@@ -81,7 +81,7 @@ public class PenumbraService : IPenumbraService
         }
     }
     
-    public string InstallMod(string sourceFilePath)
+    public (string folderPath, string modName) InstallMod(string sourceFilePath)
     {
         if (string.IsNullOrWhiteSpace(sourceFilePath))
             throw new ArgumentNullException(nameof(sourceFilePath));
@@ -99,6 +99,7 @@ public class PenumbraService : IPenumbraService
         }
 
         var destinationFolderName = Path.GetFileNameWithoutExtension(sourceFilePath);
+        var modName = destinationFolderName;
         
         using (var zipArchive = ZipFile.OpenRead(sourceFilePath))
         {
@@ -121,6 +122,7 @@ public class PenumbraService : IPenumbraService
                     if (!string.IsNullOrWhiteSpace(meta?.Name))
                     {
                         destinationFolderName = meta.Name;
+                        modName = meta.Name;
                     }
                 }
                 catch (Exception ex)
@@ -205,7 +207,7 @@ public class PenumbraService : IPenumbraService
         }
 
         _logger.Info("Installed archive from {Source} into {Destination}", sourceFilePath, destinationFolderPath);
-        return destinationFolderPath;
+        return (destinationFolderPath, modName);
     }
 
     public void ValidateAndCleanupBakFiles(string directoryPath)

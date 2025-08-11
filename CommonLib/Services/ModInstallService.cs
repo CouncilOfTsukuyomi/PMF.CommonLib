@@ -44,8 +44,8 @@ public class ModInstallService : IModInstallService
             {
                 _logger.Debug("Using PenumbraService for .pmp mod: {Path}", finalPath);
                 _penumbraService.InitializePenumbraPath();
-                var installedFolderPath = _penumbraService.InstallMod(finalPath);
-                var modName = Path.GetFileName(installedFolderPath);
+                var (installedFolderPath, modName) = _penumbraService.InstallMod(finalPath);
+                
                 try
                 {
                     await ReloadModAsync(installedFolderPath, modName);
@@ -53,6 +53,16 @@ public class ModInstallService : IModInstallService
                 catch (Exception ex)
                 {
                     _logger.Warn(ex, "ReloadModAsync failed for folder '{ModFolder}' with mod name '{ModName}'. This error is non-fatal.", installedFolderPath, modName);
+                }
+                
+                try
+                {
+                    var modFocusData = new ModFocusData(installedFolderPath, modName);
+                    await FocusModAsync(modFocusData);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn(ex, "FocusModAsync failed for folder '{ModFolder}' with mod name '{ModName}'. This error is non-fatal.", installedFolderPath, modName);
                 }
 
                 var fileName = Path.GetFileName(finalPath);
@@ -162,6 +172,19 @@ public class ModInstallService : IModInstallService
 
         await Task.Delay(200);
         _logger.Info("Successfully reloaded Penumbra mod at '{ModFolder}' with name '{ModName}'", modFolder, modName);
+    }
+
+    private async Task FocusModAsync(ModFocusData modFocusData)
+    {
+        var json = JsonConvert.SerializeObject(modFocusData);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        _logger.Debug("Sending POST request to /focusmod for mod '{ModName}' at '{ModPath}'", modFocusData.Name, modFocusData.Path);
+
+        var response = await _httpClient.PostAsync("focusmod", content);
+        response.EnsureSuccessStatusCode();
+
+        _logger.Info("Successfully focused mod '{ModName}' at '{ModPath}'", modFocusData.Name, modFocusData.Path);
     }
 
     private string ConvertIfNeeded(string originalPath)
