@@ -100,6 +100,7 @@ public class PenumbraService : IPenumbraService
 
         var destinationFolderName = Path.GetFileNameWithoutExtension(sourceFilePath);
         var modName = destinationFolderName;
+        var authorName = string.Empty;
         
         using (var zipArchive = ZipFile.OpenRead(sourceFilePath))
         {
@@ -121,8 +122,17 @@ public class PenumbraService : IPenumbraService
 
                     if (!string.IsNullOrWhiteSpace(meta?.Name))
                     {
-                        destinationFolderName = meta.Name;
                         modName = meta.Name;
+                        authorName = !string.IsNullOrWhiteSpace(meta.Author) ? meta.Author : string.Empty;
+                        
+                        if (!string.IsNullOrWhiteSpace(authorName))
+                        {
+                            destinationFolderName = $"{meta.Name} - {authorName}";
+                        }
+                        else
+                        {
+                            destinationFolderName = meta.Name;
+                        }
                     }
                 }
                 catch (Exception ex)
