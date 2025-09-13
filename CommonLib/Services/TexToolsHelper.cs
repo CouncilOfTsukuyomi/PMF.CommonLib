@@ -48,10 +48,10 @@ public class TexToolsHelper : ITexToolsHelper
             return TexToolsStatus.NotFound;
         }
 
-        _configurationService.UpdateConfigValue(
-            config => config.BackgroundWorker.TexToolPath = consoleToolPath,
+        _configurationService.UpdateConfigFromExternal(
             "BackgroundWorker.TexToolPath",
-            consoleToolPath
+            consoleToolPath,
+            "TexToolsHelper"
         );
 
         _logger.Info("Successfully configured TexTools path: {Path}", consoleToolPath);

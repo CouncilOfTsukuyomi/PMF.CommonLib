@@ -16,7 +16,10 @@ public static class ConfigurationConsts
     /// Example:
     ///     Download Path - Where downloads will be found
     /// </summary>
-    public static readonly string ConfigurationFilePath = Path.Combine(BaseDirectory, "config-v3.json");
+    public static readonly string ConfigurationFilePath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "Atomos",
+        "config-v3.json");
     
     /// <summary>
     /// The folder location where mods will be moved to after found inside the download folder.

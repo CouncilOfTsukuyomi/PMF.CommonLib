@@ -69,6 +69,50 @@ internal class ConfigurationMigrator : IConfigurationMigrator
             }
         }
         
+        // Fallback: migrate config from the old executable directory (pre-change location)
+        var exeDirFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config-v3.json");
+        if (_fileStorage.Exists(exeDirFilePath))
+        {
+            try
+            {
+                _logger.Info("Migrating existing exe-directory config file to database from {ExeDirFilePath}...", exeDirFilePath);
+                
+                using var stream = _fileStorage.OpenRead(exeDirFilePath);
+                using var reader = new StreamReader(stream);
+                var fileContent = reader.ReadToEnd();
+                
+                var fileConfig = JsonConvert.DeserializeObject<ConfigurationModel>(fileContent);
+                
+                if (fileConfig != null)
+                {
+                    await queueOperation(new ConfigurationOperation
+                    {
+                        Type = OperationType.SaveConfiguration,
+                        Configuration = fileConfig,
+                        ChangeDescription = "Migrated from exe-directory config file",
+                        Timestamp = DateTime.UtcNow
+                    });
+                    
+                    var backupPath = exeDirFilePath + ".backup";
+                    if (_fileStorage.Exists(backupPath))
+                        _fileStorage.Delete(backupPath);
+                    
+                    using (var sourceStream = _fileStorage.OpenRead(exeDirFilePath))
+                    using (var destStream = _fileStorage.OpenWrite(backupPath))
+                    {
+                        sourceStream.CopyTo(destStream);
+                    }
+                    _fileStorage.Delete(exeDirFilePath);
+                    
+                    _logger.Info("Exe-directory migration completed. Original file backed up to {BackupPath}", backupPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Failed to migrate exe-directory config file to database");
+            }
+        }
+        
         if (_fileStorage.Exists(legacyFilePath))
         {
             try
