@@ -294,14 +294,15 @@ public partial class ConfigurationService
         {
             Type = OperationType.SaveConfiguration,
             Configuration = config,
-            DetectChanges = true,
+            DetectChanges = false,
             ChangeDescription = $"External update to {propertyPath}",
             Timestamp = DateTime.UtcNow,
             SourceId = sourceId ?? "external",
-            SuppressEvents = false
+            SuppressEvents = false,
+            TargetKeys = new List<string> { propertyPath }
         };
 
-        _logger.Debug("Queueing configuration operation with DetectChanges=true and SuppressEvents=false");
+        _logger.Debug("Queueing configuration operation with DetectChanges=false and TargetKeys override");
         QueueConfigurationOperationFireAndForget(operation);
     }
 

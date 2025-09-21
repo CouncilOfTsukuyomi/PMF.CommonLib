@@ -11,4 +11,6 @@ internal class ConfigurationOperation
     public DateTime Timestamp { get; set; }
     public string? SourceId { get; set; }
     public bool SuppressEvents { get; set; }
+    // Optional: when set, only these flattened keys will be updated and events will be raised for them
+    public List<string>? TargetKeys { get; set; }
 }

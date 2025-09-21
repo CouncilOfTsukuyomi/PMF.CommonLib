@@ -58,6 +58,21 @@ public partial class ConfigurationService
                 configHistory.EnsureIndex(x => x.Key);
                 configHistory.EnsureIndex(x => x.ModifiedDateTicks);
                 
+                // Ensure metadata collection exists for migration tracking
+                var metadata = database.GetCollection<ConfigurationMetadataRecord>("configuration_metadata");
+                metadata.EnsureIndex(x => x.Id, true);
+                if (!metadata.Exists(m => m.Id == "meta"))
+                {
+                    metadata.Insert(new ConfigurationMetadataRecord
+                    {
+                        Id = "meta",
+                        LastMigrationTicks = 0,
+                        LastMigrationVersion = string.Empty,
+                        LastConfigHash = string.Empty
+                    });
+                    _logger.Debug("Created configuration metadata record");
+                }
+                
                 _logger.Info("Configuration database initialized successfully");
             }
             catch (Exception ex)

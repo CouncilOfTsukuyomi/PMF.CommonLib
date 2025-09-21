@@ -238,7 +238,14 @@ public partial class ConfigurationService
                     // Determine keys to update
                     HashSet<string> keysToUpdate;
                     Dictionary<string, object> detectedChanges = null;
-                    if ((operation.Type == OperationType.CreateConfiguration || operation.Type == OperationType.ResetConfiguration))
+
+                    // If specific target keys were provided, respect them first
+                    if (operation.TargetKeys != null && operation.TargetKeys.Any())
+                    {
+                        keysToUpdate = operation.TargetKeys.Where(k => flatConfig.ContainsKey(k)).ToHashSet();
+                        _logger.Debug("Using TargetKeys override; will update {Count} targeted keys", keysToUpdate.Count);
+                    }
+                    else if ((operation.Type == OperationType.CreateConfiguration || operation.Type == OperationType.ResetConfiguration))
                     {
                         keysToUpdate = flatConfig.Keys.ToHashSet();
                     }
@@ -323,6 +330,16 @@ public partial class ConfigurationService
                     else if (operation.Type == OperationType.CreateConfiguration || operation.Type == OperationType.ResetConfiguration)
                     {
                         // On create/reset, raise events for all written keys
+                        foreach (var key in writtenKeys)
+                        {
+                            var kv = flatConfig[key];
+                            ConfigurationChanged?.Invoke(this, new ConfigurationChangedEventArgs(key, kv.value, operation.SourceId));
+                            eventsRaised++;
+                        }
+                    }
+                    else if (operation.TargetKeys != null && operation.TargetKeys.Any() && !operation.SuppressEvents)
+                    {
+                        // When targeted keys are used (e.g., external single-property updates), raise events for written keys
                         foreach (var key in writtenKeys)
                         {
                             var kv = flatConfig[key];
