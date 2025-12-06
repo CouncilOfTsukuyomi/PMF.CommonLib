@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>net9.0</TargetFramework>
+        <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
     </PropertyGroup>
@@ -30,11 +30,11 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\SevenZipExtractor\SevenZipExtractor\SevenZipExtractor.csproj" />
+      <Folder Include="Factory\" />
     </ItemGroup>
 
     <ItemGroup>
-      <Folder Include="Factory\" />
+      <ProjectReference Include="..\SevenZipExtractor\SevenZipExtractor\SevenZipExtractor.csproj" />
     </ItemGroup>
 
 </Project>

@@ -208,7 +208,8 @@ public class TexToolsHelper : ITexToolsHelper
                 try
                 {
                     _logger.Debug($"Starting drive scan: {driveRoot}");
-                    SearchRecursively(driveRoot, result, cts);
+                    var visitedPaths = new ConcurrentDictionary<string, byte>();
+                    SearchRecursively(driveRoot, result, cts, visitedPaths, depth: 0, maxDepth: 20);
                 }
                 catch (OperationCanceledException)
                 {
@@ -250,15 +251,63 @@ public class TexToolsHelper : ITexToolsHelper
     /// <summary>
     /// Recursively searches folders, skips protected, logs progress/errors, cancels on first find.
     /// </summary>
-    private void SearchRecursively(string dir, ConcurrentBag<string> foundPath, CancellationTokenSource cts)
+    private void SearchRecursively(
+        string dir,
+        ConcurrentBag<string> foundPath,
+        CancellationTokenSource cts,
+        ConcurrentDictionary<string, byte> visitedPaths,
+        int depth,
+        int maxDepth)
     {
         if (!foundPath.IsEmpty || cts.IsCancellationRequested)
             return;
 
-        string[] protectedDirs = { "Windows", "ProgramData", "System Volume Information", "Recovery", "$Recycle.Bin", "PerfLogs" };
+        // Check depth limit to prevent excessive recursion
+        if (depth > maxDepth)
+        {
+            _logger.Debug($"Max depth {maxDepth} reached at: {dir}");
+            return;
+        }
+
+        // Windows-specific protected directories
+        string[] windowsProtectedDirs = {
+            "Windows", "ProgramData", "System Volume Information",
+            "Recovery", "$Recycle.Bin", "PerfLogs"
+        };
+
+        // Linux/Unix-specific protected directories and mount points
+        string[] unixProtectedDirs = {
+            "proc", "sys", "dev", "run", "tmp", "snap",
+            "var", "boot", "etc", "root", "lost+found",
+            // WSL-specific mounts that cause issues
+            "wslg", "mnt"
+        };
 
         try
         {
+            // Get the real path to detect symlink loops
+            string realPath;
+            try
+            {
+                var dirInfo = new DirectoryInfo(dir);
+                if (dirInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                {
+                    _logger.Debug($"Skipping symbolic link/junction: {dir}");
+                    return;
+                }
+                realPath = dirInfo.FullName;
+            }
+            catch
+            {
+                realPath = dir;
+            }
+            
+            if (!visitedPaths.TryAdd(realPath, 0))
+            {
+                _logger.Debug($"Skipping already visited directory (potential symlink loop): {dir}");
+                return;
+            }
+
             foreach (var file in Directory.EnumerateFiles(dir, "ConsoleTools.exe", SearchOption.TopDirectoryOnly))
             {
                 _logger.Info($"Found ConsoleTools.exe at: {file}");
@@ -272,12 +321,22 @@ public class TexToolsHelper : ITexToolsHelper
                 if (foundPath.IsEmpty && !cts.IsCancellationRequested)
                 {
                     string sub = Path.GetFileName(subDir);
-                    if (protectedDirs.Any(p => string.Equals(p, sub, StringComparison.OrdinalIgnoreCase)))
+
+                    // Check against Windows protected directories
+                    if (windowsProtectedDirs.Any(p => string.Equals(p, sub, StringComparison.OrdinalIgnoreCase)))
                     {
-                        _logger.Debug($"Skipping protected/system directory: {subDir}");
+                        _logger.Debug($"Skipping Windows protected/system directory: {subDir}");
                         continue;
                     }
-                    SearchRecursively(subDir, foundPath, cts);
+
+                    // Check against Unix/Linux protected directories
+                    if (unixProtectedDirs.Any(p => string.Equals(p, sub, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        _logger.Debug($"Skipping Unix/Linux protected/system directory: {subDir}");
+                        continue;
+                    }
+
+                    SearchRecursively(subDir, foundPath, cts, visitedPaths, depth + 1, maxDepth);
                 }
                 else
                 {
@@ -295,7 +354,7 @@ public class TexToolsHelper : ITexToolsHelper
         }
         catch (IOException ioex)
         {
-            _logger.Error($"I/O error in directory {dir}: {ioex.Message}");
+            _logger.Warn($"I/O error in directory {dir}: {ioex.Message}");
         }
         catch (OperationCanceledException)
         {
@@ -303,7 +362,7 @@ public class TexToolsHelper : ITexToolsHelper
         }
         catch (Exception ex)
         {
-            _logger.Error(ex, $"Unexpected error while traversing {dir}");
+            _logger.Warn(ex, $"Unexpected error while traversing {dir}");
         }
     }
 }
