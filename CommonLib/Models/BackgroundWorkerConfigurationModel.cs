@@ -23,7 +23,9 @@ public class BackgroundWorkerConfigurationModel
         get => _downloadPath;
         set => _downloadPath = value.Distinct().ToList();
     }
-
+    [Display(Name = "Pose Destination Path", GroupName = "Pathing",
+          Description = "Where to move .pose files when they are detected")]
+    public string PoseDestinationPath { get; set; } = string.Empty;
     [Display(Name = "TexTool ConsoleTools.exe Path", GroupName = "Pathing", Description = "The path to Textool's Console Tools.exe")]
     public string TexToolPath { get; set; } = string.Empty;
     [Display(Name = "Skip Endwalker and below mods", GroupName = "General", Description = "Skip endwalker and below mods")]
